@@ -59,6 +59,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
+import androidx.media3.ui.PlayerNotificationManager
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.azsaidi.shasha.R
@@ -83,6 +84,8 @@ class PlayerActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
     /** Tells the system what's playing (headphone/Bluetooth buttons, car displays, Google TV). */
     private var mediaSession: MediaSession? = null
+    /** The playback card in the notification shade and on the lock screen. */
+    private var playbackNotification: PlayerNotificationManager? = null
     private lateinit var playerView: PlayerView
     private lateinit var topBar: LinearLayout
     private lateinit var titleView: TextView
@@ -715,6 +718,59 @@ class PlayerActivity : ComponentActivity() {
 
     // ------------------------------------------------------------------ playback
 
+    /** Media controls in the notification shade and on the lock screen while something plays. */
+    private fun startPlaybackNotification(exo: ExoPlayer) {
+        playbackNotification?.setPlayer(null)
+        val adapter = object : PlayerNotificationManager.MediaDescriptionAdapter {
+            override fun getCurrentContentTitle(player: Player): CharSequence =
+                player.mediaMetadata.title ?: getString(R.string.app_name)
+
+            override fun getCurrentContentText(player: Player): CharSequence? = player.mediaMetadata.artist
+
+            override fun createCurrentContentIntent(player: Player): PendingIntent? =
+                PendingIntent.getActivity(
+                    this@PlayerActivity, 1,
+                    Intent(this@PlayerActivity, PlayerActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                )
+
+            override fun getCurrentLargeIcon(
+                player: Player,
+                callback: PlayerNotificationManager.BitmapCallback,
+            ): android.graphics.Bitmap? {
+                val uri = player.mediaMetadata.artworkUri ?: return null
+                lifecycleScope.launch {
+                    val request = coil.request.ImageRequest.Builder(this@PlayerActivity)
+                        .data(uri)
+                        .allowHardware(false)
+                        .size(512)
+                        .build()
+                    val drawable = runCatching { coil.Coil.imageLoader(this@PlayerActivity).execute(request).drawable }.getOrNull()
+                    (drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap?.let { callback.onBitmap(it) }
+                }
+                return null
+            }
+        }
+        playbackNotification = runCatching {
+            PlayerNotificationManager.Builder(this, PLAYBACK_NOTIFICATION_ID, PLAYBACK_CHANNEL_ID)
+                .setChannelNameResourceId(R.string.now_playing)
+                .setMediaDescriptionAdapter(adapter)
+                .build()
+                .apply {
+                    setUseNextActionInCompactView(true)
+                    setUsePreviousActionInCompactView(true)
+                    setUseFastForwardAction(false)
+                    setUseRewindAction(false)
+                    setSmallIcon(R.drawable.ic_stat_play)
+                    mediaSession?.let { session ->
+                        (session.sessionCompatToken.token as? android.media.session.MediaSession.Token)?.let { setMediaSessionToken(it) }
+                    }
+                    setPlayer(exo)
+                }
+        }.getOrNull()
+    }
+
     private fun mediaItem(item: PlayItem, url: String): MediaItem {
         val builder = MediaItem.Builder()
             .setUri(url)
@@ -776,6 +832,7 @@ class PlayerActivity : ComponentActivity() {
         mediaSession = runCatching {
             MediaSession.Builder(this, exo).setId("shasha-${System.nanoTime()}").build()
         }.getOrNull()
+        startPlaybackNotification(exo)
         player = exo
         // Downloads wait while we stream on plans that allow only one connection.
         Downloads.setStreaming(items.any { it.url.startsWith("http") })
@@ -792,6 +849,8 @@ class PlayerActivity : ComponentActivity() {
         saveCurrent()
         startIndex = p.currentMediaItemIndex.coerceIn(0, items.lastIndex)
         p.removeListener(listener)
+        playbackNotification?.setPlayer(null)
+        playbackNotification = null
         mediaSession?.release()
         mediaSession = null
         p.release()
@@ -1051,5 +1110,7 @@ class PlayerActivity : ComponentActivity() {
         const val CMD_NEXT = "next"
         const val CMD_PREVIOUS = "previous"
         const val UP_NEXT_MS = 15_000L
+        private const val PLAYBACK_NOTIFICATION_ID = 4202
+        private const val PLAYBACK_CHANNEL_ID = "playback"
     }
 }

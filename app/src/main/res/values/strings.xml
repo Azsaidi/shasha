@@ -280,4 +280,5 @@
     <string name="dl_waiting_turn">Waiting for the other downloads</string>
     <string name="dl_waiting_stream">Waiting until playback stops (your plan allows 1 connection)</string>
     <string name="dl_retrying">Failed, trying again shortly…</string>
+    <string name="now_playing">Now playing</string>
 </resources>
