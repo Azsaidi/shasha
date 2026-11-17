@@ -278,6 +278,7 @@ final class Downloads: NSObject, ObservableObject {
         items.removeAll { $0.key == item.key }
         status[item.key] = nil
         attempts[item.key] = nil
+        forgetSpeed(item.key)
         save()
         kick()
     }
@@ -327,14 +328,22 @@ final class Downloads: NSObject, ObservableObject {
         currentTask = task
         currentKey = item.key
         pieceStart[item.key] = have
+        // Keep measuring speed across pieces; only a fresh start begins a new measurement.
+        if lastPublish[item.key] == nil { lastPublish[item.key] = (Date(), have) }
         stopping = false
         let previous = status[item.key]
         status[item.key] = DownloadStatus(state: .running, bytes: have, total: item.total, speed: previous?.speed ?? 0)
         task.resume()
     }
 
+    private func forgetSpeed(_ key: String) {
+        lastPublish[key] = nil
+        speeds[key] = nil
+    }
+
     private func pauseCurrent() {
         guard let task = currentTask, let key = currentKey else { return }
+        forgetSpeed(key)
         stopping = true
         currentTask = nil
         currentKey = nil
@@ -349,6 +358,7 @@ final class Downloads: NSObject, ObservableObject {
     }
 
     private func fail(_ key: String, _ reason: Int) {
+        forgetSpeed(key)
         replace(key) { $0.failedReason = reason }
         let item = findByKey(key)
         status[key] = DownloadStatus(state: .failed, bytes: item.map { fileSize(partFile($0)) } ?? 0,
@@ -449,12 +459,18 @@ final class Downloads: NSObject, ObservableObject {
                 // Done when we reach the known size, or (size unknown) when a piece comes back short.
                 if (known > 0 && have >= known) || (known <= 0 && pieceBytes < requested) {
                     self.finish(key)
-                } else if var s = self.status[key] {
-                    // Not finished: line it up for the next piece (kick() starts it straight away).
-                    s.bytes = have
-                    s.state = .queued
-                    s.reason = 0
-                    self.status[key] = s
+                } else if let item = self.findByKey(key) {
+                    if self.currentTask == nil, self.canDownloadNow, Connectivity.shared.isOnline {
+                        // Straight on to the next piece, keeping the speed and time left on screen.
+                        self.start(item)
+                    } else if var s = self.status[key] {
+                        s.bytes = have
+                        s.state = .queued
+                        s.reason = 0
+                        self.forgetSpeed(key)
+                        s.speed = 0
+                        self.status[key] = s
+                    }
                 }
             }
         }
@@ -537,9 +553,10 @@ extension Downloads: URLSessionDownloadDelegate {
             currentTask = nil
             currentKey = nil
         }
-        lastPublish[key] = nil
-        speeds[key] = nil
         let result = outcome.removeValue(forKey: key)
+        var continuing = false
+        if error == nil, case .some(.piece) = result { continuing = true }
+        if !continuing { forgetSpeed(key) }
 
         if let error {
             // Paused for streaming, removed, or replaced: nothing more to do.
