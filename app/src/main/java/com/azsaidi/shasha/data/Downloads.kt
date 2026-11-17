@@ -2,18 +2,14 @@ package com.azsaidi.shasha.data
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -31,12 +27,16 @@ data class DownloadItem(
     val seriesName: String?,
     val season: Int,
     val episode: Int,
-    /** Android download id; 0 while it's still waiting its turn. */
+    /** Only used by downloads started with Android's download service in older versions. */
     val systemId: Long,
     val fileName: String,
     val addedAt: Long,
     val url: String = "",
     val retries: Int = 0,
+    val done: Boolean = false,
+    /** 0 = no failure; an HTTP code; or one of the REASON_* values. */
+    val failedReason: Int = 0,
+    val total: Long = 0,
 ) {
     val key: String get() = WatchEntry.keyOf(kind, streamId)
 
@@ -46,6 +46,7 @@ data class DownloadItem(
         .put("seriesId", seriesId ?: "").put("seriesName", seriesName ?: "")
         .put("season", season).put("episode", episode).put("sys", systemId)
         .put("file", fileName).put("at", addedAt).put("url", url).put("retries", retries)
+        .put("done", done).put("failed", failedReason).put("total", total)
 
     companion object {
         fun fromJson(o: JSONObject): DownloadItem? = runCatching {
@@ -66,6 +67,9 @@ data class DownloadItem(
                 addedAt = o.optLong("at"),
                 url = o.optString("url"),
                 retries = o.optInt("retries"),
+                done = o.optBoolean("done"),
+                failedReason = o.optInt("failed"),
+                total = o.optLong("total"),
             )
         }.getOrNull()
     }
@@ -77,7 +81,7 @@ data class DownloadStatus(
     val state: DownloadState,
     val bytes: Long,
     val total: Long,
-    /** For failures: an HTTP status code, or one of DownloadManager's ERROR_* codes. */
+    /** For failures: an HTTP status code, or one of the REASON_* values. */
     val reason: Int = 0,
 ) {
     /** 0..1, or null when the size isn't known yet. */
@@ -86,36 +90,66 @@ data class DownloadStatus(
 }
 
 /**
- * Downloads use Android's own download service, so they keep going in the background and survive
- * the app being closed. They run strictly one at a time: IPTV plans often allow only one
- * connection, and parallel downloads (or downloading while streaming) get refused by the server.
+ * The download queue. The actual downloading happens in [DownloadService], a foreground service
+ * that keeps going after you leave the app. Downloads run one at a time and pause while
+ * something streams on plans that allow only one connection; partial files are resumed.
  */
 object Downloads {
-    private const val MAX_AUTO_RETRIES = 5
+    const val REASON_DROPPED = -2
+    const val REASON_NO_SPACE = -3
+    const val REASON_NEEDS_REDOWNLOAD = -4
 
     private lateinit var app: Context
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var polling: Job? = null
 
     val items = mutableStateListOf<DownloadItem>()
     val status = mutableStateMapOf<String, DownloadStatus>()
 
-    /** True while something is streaming from the provider; new downloads wait on 1-connection plans. */
-    var streaming by mutableStateOf(false)
+    /** True while something streams from the provider. */
+    var streamingNow by mutableStateOf(false)
         private set
-
-    private val manager: DownloadManager
-        get() = app.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
 
     private val prefs get() = app.getSharedPreferences("downloads", Context.MODE_PRIVATE)
 
     fun init(context: Context) {
         app = context.applicationContext
         items.clear()
-        items.addAll(load())
-        refreshStatus()
-        pump()
-        startPolling()
+        items.addAll(load().map { migrateLegacy(it) })
+        status.clear()
+        for (item in items) status[item.key] = initialStatus(item)
+        save()
+        kick()
+    }
+
+    /** Downloads started by older versions used Android's download service; adopt or re-queue them. */
+    private fun migrateLegacy(item: DownloadItem): DownloadItem {
+        if (item.systemId <= 0 || item.done) return item
+        val manager = app.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+        var successful = false
+        runCatching {
+            manager?.query(DownloadManager.Query().setFilterById(item.systemId))?.use { c ->
+                if (c.moveToFirst()) {
+                    successful = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) == DownloadManager.STATUS_SUCCESSFUL
+                }
+            }
+        }
+        val f = file(item)
+        if (successful && f != null && f.exists() && f.length() > 0) return item.copy(systemId = 0, done = true, total = f.length())
+        runCatching { manager?.remove(item.systemId) }
+        return if (item.url.isBlank()) {
+            item.copy(systemId = 0, failedReason = REASON_NEEDS_REDOWNLOAD)
+        } else {
+            item.copy(systemId = 0, failedReason = 0, retries = 0)
+        }
+    }
+
+    private fun initialStatus(item: DownloadItem): DownloadStatus {
+        val size = file(item)?.takeIf { it.exists() }?.length() ?: 0L
+        return when {
+            item.done && size > 0 -> DownloadStatus(DownloadState.DONE, size, size)
+            item.done -> DownloadStatus(DownloadState.FAILED, 0, 0, REASON_NEEDS_REDOWNLOAD)
+            item.failedReason != 0 -> DownloadStatus(DownloadState.FAILED, size, item.total, item.failedReason)
+            else -> DownloadStatus(DownloadState.QUEUED, size, item.total)
+        }
     }
 
     private fun load(): List<DownloadItem> = runCatching {
@@ -129,14 +163,16 @@ object Downloads {
         prefs.edit().putString("items", arr.toString()).apply()
     }
 
-    private fun dir(): File? = app.getExternalFilesDir("downloads")
+    private fun dir(): File? = app.getExternalFilesDir("downloads") ?: File(app.filesDir, "downloads").apply { mkdirs() }
 
-    private fun file(item: DownloadItem): File? = dir()?.let { File(it, item.fileName) }
+    fun file(item: DownloadItem): File? = dir()?.let { File(it, item.fileName) }
 
     fun find(kind: WatchKind, streamId: String): DownloadItem? {
         val key = WatchEntry.keyOf(kind, streamId)
         return items.firstOrNull { it.key == key }
     }
+
+    fun findByKey(key: String): DownloadItem? = items.firstOrNull { it.key == key }
 
     /** A file:// address for a finished download, so playback works without internet. */
     fun localUri(kind: WatchKind, streamId: String): String? {
@@ -146,10 +182,22 @@ object Downloads {
         return if (f.exists() && f.length() > 0) Uri.fromFile(f).toString() else null
     }
 
-    /** Called by the players: streaming from the provider holds back the next download. */
+    private fun onePerAccount(): Boolean = (Session.auth?.maxConnections?.toIntOrNull() ?: 1) <= 1
+
+    /** Called by the players. On one-connection plans the download pauses and resumes afterwards. */
     fun setStreaming(active: Boolean) {
-        streaming = active
-        if (!active) pump()
+        streamingNow = active
+        if (active && onePerAccount()) DownloadService.pauseCurrent() else if (!active) kick()
+    }
+
+    /** True if the service may download now. */
+    fun canDownloadNow(): Boolean = !(streamingNow && onePerAccount())
+
+    /** The next item to download, or null. */
+    fun next(): DownloadItem? {
+        if (!canDownloadNow()) return null
+        return items.filter { status[it.key]?.state == DownloadState.QUEUED || status[it.key]?.state == DownloadState.PAUSED }
+            .minByOrNull { it.addedAt }
     }
 
     /** Adds a download to the queue; returns false if it couldn't be queued. */
@@ -183,30 +231,25 @@ object Downloads {
         items.add(item)
         status[item.key] = DownloadStatus(DownloadState.QUEUED, 0, 0)
         save()
-        pump()
-        startPolling()
+        kick()
         return true
     }
 
-    /** Tries a failed download again (from the start). */
+    /** Tries a failed download again, keeping what was already downloaded. */
     fun retry(item: DownloadItem) {
-        runCatching { if (item.systemId > 0) manager.remove(item.systemId) }
-        file(item)?.delete()
-        replace(item.copy(systemId = 0, retries = 0))
-        status[item.key] = DownloadStatus(DownloadState.QUEUED, 0, 0)
+        replace(item.copy(retries = 0, failedReason = 0))
+        status[item.key] = DownloadStatus(DownloadState.QUEUED, file(item)?.length() ?: 0, item.total)
         save()
-        pump()
-        startPolling()
+        kick()
     }
 
-    /** Cancels (if still running) and deletes the file. */
+    /** Cancels (if running) and deletes the file. */
     fun remove(item: DownloadItem) {
-        runCatching { if (item.systemId > 0) manager.remove(item.systemId) }
+        DownloadService.cancel(item.key)
         file(item)?.delete()
         items.removeAll { it.key == item.key }
         status.remove(item.key)
         save()
-        pump()
     }
 
     fun usedBytes(): Long = dir()?.listFiles()?.sumOf { it.length() } ?: 0L
@@ -218,118 +261,38 @@ object Downloads {
         if (index >= 0) items[index] = item
     }
 
-    private fun onePerAccount(): Boolean = (Session.auth?.maxConnections?.toIntOrNull() ?: 1) <= 1
+    /** Starts the background service if there is something to download. */
+    fun kick() {
+        if (!::app.isInitialized || next() == null) return
+        runCatching { ContextCompat.startForegroundService(app, Intent(app, DownloadService::class.java)) }
+    }
 
-    /** Starts the next waiting download if nothing else is downloading. */
-    private fun pump() {
-        if (!::app.isInitialized) return
-        val busy = items.any { it.systemId > 0 && status[it.key]?.active == true }
-        if (busy) return
-        if (streaming && onePerAccount()) return
-        val next = items.filter { it.systemId == 0L && status[it.key]?.state != DownloadState.FAILED }
-            .minByOrNull { it.addedAt } ?: return
-        if (next.url.isBlank()) {
-            status[next.key] = DownloadStatus(DownloadState.FAILED, 0, 0)
-            return
-        }
-        val id = runCatching {
-            val request = DownloadManager.Request(Uri.parse(next.url))
-                .addRequestHeader("User-Agent", Http.USER_AGENT)
-                .setTitle(if (next.subtitle != null) "${next.title} · ${next.subtitle}" else next.title)
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(true)
-                .setDestinationInExternalFilesDir(app, "downloads", next.fileName)
-            manager.enqueue(request)
-        }.getOrNull()
-        if (id == null) {
-            status[next.key] = DownloadStatus(DownloadState.FAILED, 0, 0)
-            save()
-            return
-        }
-        replace(next.copy(systemId = id))
-        status[next.key] = DownloadStatus(DownloadState.QUEUED, 0, 0)
+    // --- called by DownloadService (on the main thread) ---
+
+    internal fun markProgress(key: String, bytes: Long, total: Long) {
+        val item = findByKey(key) ?: return
+        val next = DownloadStatus(DownloadState.RUNNING, bytes, total)
+        if (status[key] != next) status[key] = next
+        if (total > 0 && item.total != total) replace(item.copy(total = total))
+    }
+
+    internal fun markPaused(key: String) {
+        val item = findByKey(key) ?: return
+        status[key] = DownloadStatus(DownloadState.PAUSED, file(item)?.length() ?: 0, item.total)
+    }
+
+    internal fun markDone(key: String, size: Long) {
+        val item = findByKey(key) ?: return
+        replace(item.copy(done = true, failedReason = 0, total = size))
+        status[key] = DownloadStatus(DownloadState.DONE, size, size)
         save()
     }
 
-    private fun startPolling() {
-        if (polling?.isActive == true) return
-        polling = scope.launch {
-            while (true) {
-                refreshStatus()
-                pump()
-                if (status.values.none { it.active }) break
-                delay(1_000)
-            }
-        }
-    }
-
-    private fun refreshStatus() {
-        if (items.isEmpty()) return
-        val started = items.filter { it.systemId > 0 }
-        val byId = started.associateBy { it.systemId }
-        val seen = HashSet<Long>()
-        if (byId.isNotEmpty()) {
-            runCatching {
-                manager.query(DownloadManager.Query().setFilterById(*byId.keys.toLongArray()))?.use { c ->
-                    val idCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
-                    val statusCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
-                    val reasonCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON)
-                    val bytesCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-                    val totalCol = c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-                    while (c.moveToNext()) {
-                        val id = c.getLong(idCol)
-                        val item = byId[id] ?: continue
-                        seen.add(id)
-                        val state = when (c.getInt(statusCol)) {
-                            DownloadManager.STATUS_SUCCESSFUL -> DownloadState.DONE
-                            DownloadManager.STATUS_FAILED -> DownloadState.FAILED
-                            DownloadManager.STATUS_PAUSED -> DownloadState.PAUSED
-                            DownloadManager.STATUS_RUNNING -> DownloadState.RUNNING
-                            else -> DownloadState.QUEUED
-                        }
-                        val reason = if (state == DownloadState.FAILED) c.getInt(reasonCol) else 0
-                        update(item, DownloadStatus(state, c.getLong(bytesCol), c.getLong(totalCol), reason))
-                    }
-                }
-            }
-        }
-        for (item in items) {
-            if (item.systemId == 0L) {
-                // Still waiting its turn (unless it already failed to start).
-                if (status[item.key]?.state != DownloadState.FAILED) {
-                    val waiting = DownloadStatus(DownloadState.QUEUED, 0, 0)
-                    if (status[item.key] != waiting) status[item.key] = waiting
-                }
-                continue
-            }
-            if (item.systemId in seen) continue
-            // The system forgot about it: finished if the file is there, otherwise failed.
-            val f = file(item)
-            val done = f != null && f.exists() && f.length() > 0
-            update(item, DownloadStatus(if (done) DownloadState.DONE else DownloadState.FAILED, f?.length() ?: 0, f?.length() ?: 0))
-        }
-    }
-
-    private fun update(item: DownloadItem, next: DownloadStatus) {
-        val previous = status[item.key]
-        if (previous == next) return
-        status[item.key] = next
-        // A refused or dropped download usually works on a second try once the connection is free.
-        if (next.state == DownloadState.FAILED && previous?.state != DownloadState.FAILED && item.retries < MAX_AUTO_RETRIES && next.reason != DownloadManager.ERROR_INSUFFICIENT_SPACE) {
-            scope.launch {
-                delay(15_000)
-                val current = items.firstOrNull { it.key == item.key } ?: return@launch
-                if (status[current.key]?.state != DownloadState.FAILED) return@launch
-                runCatching { manager.remove(current.systemId) }
-                file(current)?.delete()
-                replace(current.copy(systemId = 0, retries = current.retries + 1))
-                status[current.key] = DownloadStatus(DownloadState.QUEUED, 0, 0)
-                save()
-                pump()
-                startPolling()
-            }
-        }
+    internal fun markFailed(key: String, reason: Int) {
+        val item = findByKey(key) ?: return
+        replace(item.copy(failedReason = reason))
+        status[key] = DownloadStatus(DownloadState.FAILED, file(item)?.length() ?: 0, item.total, reason)
+        save()
     }
 }
 

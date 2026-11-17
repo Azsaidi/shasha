@@ -54,7 +54,6 @@ import com.azsaidi.shasha.data.Downloads
 import com.azsaidi.shasha.data.WatchKind
 import com.azsaidi.shasha.data.formatBytes
 import com.azsaidi.shasha.data.Session
-import android.app.DownloadManager
 import com.azsaidi.shasha.player.Playback
 
 /** Why a download failed, in plain words. */
@@ -62,9 +61,9 @@ fun downloadFailureText(context: Context, reason: Int): String = when {
     reason == 401 || reason == 403 || reason == 429 || reason == 456 || reason == 509 || reason == 503 ->
         context.getString(R.string.dl_err_refused, reason, Session.auth?.maxConnections ?: "1")
     reason == 404 -> context.getString(R.string.dl_err_not_found)
-    reason == DownloadManager.ERROR_INSUFFICIENT_SPACE -> context.getString(R.string.dl_err_space)
-    reason == DownloadManager.ERROR_CANNOT_RESUME || reason == DownloadManager.ERROR_HTTP_DATA_ERROR ||
-        reason == DownloadManager.ERROR_FILE_ERROR -> context.getString(R.string.dl_err_dropped)
+    reason == Downloads.REASON_NO_SPACE -> context.getString(R.string.dl_err_space)
+    reason == Downloads.REASON_DROPPED -> context.getString(R.string.dl_err_dropped)
+    reason == Downloads.REASON_NEEDS_REDOWNLOAD -> context.getString(R.string.download_failed)
     reason > 0 -> context.getString(R.string.dl_err_code, reason)
     else -> context.getString(R.string.download_failed)
 }
@@ -72,19 +71,19 @@ fun downloadFailureText(context: Context, reason: Int): String = when {
 /** Short status text for a download. */
 fun downloadStatusText(context: Context, status: DownloadStatus?, item: DownloadItem? = null): String = when (status?.state) {
     null, DownloadState.QUEUED -> when {
-        item == null || item.systemId > 0 -> context.getString(R.string.download_queued)
-        Downloads.streaming -> context.getString(R.string.dl_waiting_stream)
+        !Downloads.canDownloadNow() -> context.getString(R.string.dl_waiting_stream)
+        item == null -> context.getString(R.string.download_queued)
         else -> context.getString(R.string.dl_waiting_turn)
     }
     DownloadState.RUNNING -> status.fraction?.let { context.getString(R.string.downloading_pct, (it * 100).toInt()) }
         ?: context.getString(R.string.downloading)
-    DownloadState.PAUSED -> context.getString(R.string.download_paused)
-    DownloadState.DONE -> context.getString(R.string.downloaded)
-    DownloadState.FAILED -> if (item != null && item.url.isNotBlank() && item.retries < 5 && status.reason != DownloadManager.ERROR_INSUFFICIENT_SPACE) {
-        context.getString(R.string.dl_retrying)
+    DownloadState.PAUSED -> if (!Downloads.canDownloadNow()) {
+        context.getString(R.string.dl_waiting_stream)
     } else {
-        downloadFailureText(context, status.reason)
+        context.getString(R.string.download_paused)
     }
+    DownloadState.DONE -> context.getString(R.string.downloaded)
+    DownloadState.FAILED -> downloadFailureText(context, status.reason)
 }
 
 /** Options for something that is downloaded or downloading. */
@@ -95,7 +94,8 @@ fun showDownloadMenu(context: Context, item: DownloadItem, retry: (() -> Unit)? 
         actions.add(MenuAction(context.getString(R.string.play), Icons.Filled.PlayArrow) { Playback.downloads(context, item) })
         actions.add(MenuAction(context.getString(R.string.delete_download), Icons.Filled.Delete) { Downloads.remove(item) })
     } else if (state == DownloadState.FAILED) {
-        val again = retry ?: if (item.url.isNotBlank()) ({ Downloads.retry(item) }) else null
+        // Resume what's already downloaded when we can; otherwise start it again from scratch.
+        val again: (() -> Unit)? = if (item.url.isNotBlank()) ({ Downloads.retry(item) }) else retry
         if (again != null) actions.add(MenuAction(context.getString(R.string.retry_download), Icons.Filled.Refresh, again))
         actions.add(MenuAction(context.getString(R.string.delete_download), Icons.Filled.Delete) { Downloads.remove(item) })
     } else {

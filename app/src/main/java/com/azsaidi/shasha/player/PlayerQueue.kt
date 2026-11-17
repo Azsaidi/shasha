@@ -221,7 +221,18 @@ object Playback {
 
 /** Download helpers that need the open account. */
 object DownloadActions {
+    /** On Android 13+ the progress notification needs permission; ask once when downloading. */
+    private fun askForNotifications(context: Context) {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        val activity = context as? android.app.Activity ?: return
+        if (androidx.core.content.ContextCompat.checkSelfPermission(activity, android.Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return
+        androidx.core.app.ActivityCompat.requestPermissions(activity, arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 7)
+    }
+
     fun movie(context: Context, id: String, title: String, image: String?, extension: String?): Boolean {
+        askForNotifications(context)
         val api = Session.api ?: return false
         val accountId = Session.account?.id ?: return false
         val ext = extension ?: "mp4"
@@ -236,6 +247,7 @@ object DownloadActions {
 
     /** Downloads every episode in the list that isn't already downloaded or downloading. */
     fun episodes(context: Context, seriesId: String, seriesName: String, cover: String?, episodes: List<Episode>): Int {
+        askForNotifications(context)
         val api = Session.api ?: return 0
         val accountId = Session.account?.id ?: return 0
         var started = 0
