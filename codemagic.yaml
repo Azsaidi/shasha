@@ -21,7 +21,8 @@ workflows:
         BUNDLE_ID: "com.azsaidi.shasha"
         XCODE_WORKSPACE: "ios/Shasha.xcworkspace"
         XCODE_SCHEME: "Shasha"
-      xcode: latest
+      # Pinned (not "latest") to avoid the busy machine pool for the newest Xcode.
+      xcode: 26.4
       cocoapods: default
     triggering:
       events: []
