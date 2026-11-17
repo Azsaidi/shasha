@@ -92,6 +92,12 @@ enum Engines {
 final class PlayerLayerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    var onWindowChange: (() -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        onWindowChange?()
+    }
 }
 
 final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDelegate {
@@ -114,7 +120,8 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
         layerView.playerLayer.player = player
         layerView.playerLayer.videoGravity = .resizeAspect
         player.allowsExternalPlayback = true
-        setUpPip()
+        // Picture-in-picture is set up once the video is on screen and ready (see setUpPip).
+        layerView.onWindowChange = { [weak self] in self?.setUpPip() }
         statusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { self?.reportStatus() }
         }
@@ -132,7 +139,11 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
 
     /// Picture-in-picture needs the layer to be showing a player; (re)create it once the video is ready.
     private func setUpPip() {
-        guard pip == nil, AVPictureInPictureController.isPictureInPictureSupported() else { return }
+        guard AVPictureInPictureController.isPictureInPictureSupported(), layerView.window != nil,
+              player.currentItem?.status == .readyToPlay else { return }
+        // A controller made too early can stay "not possible" forever; replace it if so.
+        if let existing = pip, existing.isPictureInPicturePossible || existing.isPictureInPictureActive { return }
+        pip?.delegate = nil
         let controller = AVPictureInPictureController(contentSource: .init(playerLayer: layerView.playerLayer))
         controller.delegate = self
         controller.canStartPictureInPictureAutomaticallyFromInline = Store.shared.autoPip
@@ -265,14 +276,25 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
 
     // Picture-in-picture
 
-    var supportsPip: Bool { pip != nil }
-    var canStartPip: Bool { (pip?.isPictureInPicturePossible ?? false) && showsPicture }
+    var supportsPip: Bool { AVPictureInPictureController.isPictureInPictureSupported() }
+    var canStartPip: Bool {
+        setUpPip()
+        return (pip?.isPictureInPicturePossible ?? false) && showsPicture
+    }
     var pipActive: Bool { pip?.isPictureInPictureActive ?? false }
 
     func startPip() { pip?.startPictureInPicture() }
     func stopPip() { pip?.stopPictureInPicture() }
 
     func setAutoPip(_ on: Bool) { pip?.canStartPictureInPictureAutomaticallyFromInline = on }
+
+    /// Why picture-in-picture can't start, for the message shown instead.
+    var pipProblem: String? {
+        if !AVPictureInPictureController.isPictureInPictureSupported() { return "unsupported" }
+        if !showsPicture { return "no-picture" }
+        if pip == nil { return "not-ready" }
+        return pip?.isPictureInPicturePossible == true ? nil : "not-possible"
+    }
 
     func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
         onPipChange?(true)
@@ -390,6 +412,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
         reported = nil
         hadPlayback = false
         report(.loading)
+        lastPollTime = -1
         let media = VLCMedia(url: url)
         media.addOption(":http-user-agent=\(Http.userAgent)")
         media.addOption(":network-caching=1500")
@@ -401,8 +424,18 @@ final class VLCEngine: NSObject, PlaybackEngine {
         timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in self?.poll() }
     }
 
+    private var lastPollTime: Double = -1
+
     private func poll() {
         surface.videoSize = player.videoSize
+        // VLC can stay in "buffering" while it plays; moving time means it's playing.
+        let now = position
+        defer { lastPollTime = now }
+        if player.isPlaying, lastPollTime >= 0, now > lastPollTime {
+            hadPlayback = true
+            report(.playing)
+            return
+        }
         switch player.state {
         case .playing:
             hadPlayback = true

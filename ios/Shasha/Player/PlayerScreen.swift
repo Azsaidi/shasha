@@ -64,9 +64,12 @@ enum Orientation {
 struct PlayerScreen: View {
     @ObservedObject var model: PlayerModel
     @ObservedObject private var multi = MultiView.shared
-    @Environment(\.layoutDirection) private var direction
     @State private var showTracks = false
     @State private var showList = false
+    /// Double-tap skip feedback: -1 back, 1 forward, 0 hidden.
+    @State private var skipSide = 0
+    @State private var skipSeconds = 0
+    @State private var skipToken = 0
 
     var body: some View {
         ZStack {
@@ -132,22 +135,52 @@ struct PlayerScreen: View {
 
     // MARK: Gestures
 
+    /// Left third: double-tap back 10 s. Right third: forward 10 s. Single tap shows/hides controls.
+    /// Always left = back, like the time bar, in Arabic too.
     private var gestureLayer: some View {
         GeometryReader { geo in
-            HStack(spacing: 0) {
-                Color.clear.contentShape(Rectangle())
-                    .onTapGesture(count: 2) { model.skip(direction == .rightToLeft ? 10 : -10) }
-                    .onTapGesture { model.toggleControls() }
-                    .frame(width: geo.size.width * 0.35)
-                Color.clear.contentShape(Rectangle())
-                    .onTapGesture { model.toggleControls() }
-                Color.clear.contentShape(Rectangle())
-                    .onTapGesture(count: 2) { model.skip(direction == .rightToLeft ? -10 : 10) }
-                    .onTapGesture { model.toggleControls() }
-                    .frame(width: geo.size.width * 0.35)
+            ZStack {
+                HStack(spacing: 0) {
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture(count: 2) { doubleTap(-1) }
+                        .onTapGesture { model.toggleControls() }
+                        .frame(width: geo.size.width * 0.35)
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture { model.toggleControls() }
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture(count: 2) { doubleTap(1) }
+                        .onTapGesture { model.toggleControls() }
+                        .frame(width: geo.size.width * 0.35)
+                }
+                if skipSide != 0 {
+                    SkipFeedback(forward: skipSide > 0, seconds: skipSeconds, size: geo.size)
+                        .id(skipToken)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
             }
         }
         .ignoresSafeArea()
+        .environment(\.layoutDirection, .leftToRight)
+    }
+
+    private func doubleTap(_ side: Int) {
+        guard model.canSkip else { return }
+        model.skip(Double(side * 10))
+        // Repeated double-taps on the same side add up: 10, 20, 30…
+        if skipSide == side {
+            skipSeconds += 10
+        } else {
+            skipSeconds = 10
+        }
+        withAnimation(.easeOut(duration: 0.15)) { skipSide = side }
+        skipToken += 1
+        let token = skipToken
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            guard token == skipToken else { return }
+            withAnimation(.easeIn(duration: 0.3)) { skipSide = 0 }
+        }
     }
 
     // MARK: Controls
@@ -510,5 +543,48 @@ struct QueueSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+/// The ripple, arrows and "10 sec" shown on the side you double-tapped.
+private struct SkipFeedback: View {
+    let forward: Bool
+    let seconds: Int
+    let size: CGSize
+    @State private var pop = false
+
+    var body: some View {
+        let width = size.width * 0.38
+        ZStack {
+            Circle()
+                .fill(.white.opacity(0.14))
+                .frame(width: size.height * 1.5, height: size.height * 1.5)
+                .offset(x: forward ? size.height * 0.55 : -size.height * 0.55)
+                .scaleEffect(pop ? 1 : 0.85)
+            VStack(spacing: 8) {
+                TimelineView(.animation) { context in
+                    let step = Int(context.date.timeIntervalSinceReferenceDate * 5) % 4
+                    HStack(spacing: 0) {
+                        ForEach(0..<3, id: \.self) { i in
+                            let lit = forward ? i == step : (2 - i) == step
+                            Image(systemName: forward ? "arrowtriangle.right.fill" : "arrowtriangle.left.fill")
+                                .font(.system(size: 16, weight: .bold))
+                                .opacity(lit ? 1 : 0.35)
+                        }
+                    }
+                }
+                Text(formatDuration(Double(seconds)))
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(.white)
+            .scaleEffect(pop ? 1 : 0.8)
+        }
+        .frame(width: width, height: size.height)
+        .clipped()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: forward ? .trailing : .leading)
+        .onAppear {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) { pop = true }
+        }
     }
 }

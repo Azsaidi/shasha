@@ -47,6 +47,7 @@ final class PlayerModel: ObservableObject, Identifiable {
     private var lastPosition: Double = 0
     private var lastDuration: Double = 0
     private var playingSince: Date?
+    private var lastTickPosition: Double = -1
     private var noPictureRetried = Set<Int>()
 
     init(items: [PlayItem], index: Int, fromStart: Bool) {
@@ -59,6 +60,8 @@ final class PlayerModel: ObservableObject, Identifiable {
     var isPlaying: Bool { state == .playing }
     var isLoading: Bool { state == .loading }
     var canZap: Bool { items.count > 1 }
+    /// Films and episodes (not live channels) can be skipped through.
+    var canSkip: Bool { !(current?.isLive ?? true) && duration > 0 }
     var errorMessage: String? {
         if case .failed(let message) = state { return message }
         return nil
@@ -107,6 +110,7 @@ final class PlayerModel: ObservableObject, Identifiable {
         engine?.stop()
         playingSince = nil
         wantsPlay = true
+        lastTickPosition = -1
         let e = Engines.make(for: url, preferVLC: preferVLC)
         e.gravity = gravity
         e.onState = { [weak self] s in self?.stateChanged(s) }
@@ -267,7 +271,8 @@ final class PlayerModel: ObservableObject, Identifiable {
         } else if engine.canStartPip {
             engine.startPip()
         } else {
-            Toast.shared.show(L("pip_unavailable"))
+            let reason = (engine as? AVEngine)?.pipProblem
+            Toast.shared.show(L("pip_unavailable") + (reason.map { " (\($0))" } ?? ""))
         }
     }
 
@@ -367,10 +372,14 @@ final class PlayerModel: ObservableObject, Identifiable {
 
     private func tick() {
         guard let engine, !closed else { return }
-        if scrubbing == nil {
-            let p = engine.position
-            if p > 0 || state == .playing { position = p }
+        let p = engine.position
+        if scrubbing == nil, p > 0 || state == .playing { position = p }
+        // Some streams never say "playing" even though the picture is moving: if time is
+        // advancing, it's playing (hides a stuck loading spinner).
+        if state == .loading, wantsPlay, lastTickPosition >= 0, p > lastTickPosition + 0.1 {
+            stateChanged(.playing)
         }
+        lastTickPosition = p
         let d = engine.duration
         if d != duration { duration = d }
         track()

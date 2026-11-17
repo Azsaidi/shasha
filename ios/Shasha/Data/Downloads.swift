@@ -48,9 +48,12 @@ struct DownloadStatus: Equatable {
     var active: Bool { state == .queued || state == .running || state == .paused }
 }
 
-/// The download queue. Uses a background URLSession so downloads keep going after you leave the app.
-/// Downloads run one at a time, continue from where they stopped when the server allows, and pause
-/// while something streams on plans that allow only one connection.
+/// The download queue.
+///
+/// Files are fetched in pieces (HTTP ranges) and each finished piece is added to a ".part" file,
+/// so stopping a download (to stream on a 1-connection plan, the app being closed, a dropped
+/// connection) loses at most the piece in progress instead of starting over. A background
+/// URLSession keeps it going after you leave the app. One download runs at a time.
 final class Downloads: NSObject, ObservableObject {
     static let shared = Downloads()
 
@@ -60,7 +63,9 @@ final class Downloads: NSObject, ObservableObject {
     static let reasonRetrying = -10
     static let reasonStreaming = -11
 
-    private static let maxAttempts = 5
+    private static let maxAttempts = 8
+    /// Size of each piece. Smaller loses less when paused; larger makes fewer requests.
+    private static let chunkSize: Int64 = 32 << 20
     static let sessionId = "com.azsaidi.shasha.downloads"
 
     @Published private(set) var items: [DownloadItem] = []
@@ -79,34 +84,43 @@ final class Downloads: NSObject, ObservableObject {
     private var session: URLSession!
     private var currentTask: URLSessionDownloadTask?
     private var currentKey: String?
-    private var stopping: Stop?
+    /// Where the running piece starts in the file.
+    private var pieceStart: [String: Int64] = [:]
+    /// True while a finished piece is being added to its file (the next piece waits for it).
+    private var appending = false
+    private var stopping = false
     private var attempts: [String: Int] = [:]
     private var outcome: [String: Outcome] = [:]
     private var lastPublish: [String: (time: Date, bytes: Int64)] = [:]
     private var speeds: [String: Double] = [:]
-    /// Downloads started from saved resume data (if that fails, start over instead).
-    private var resumed = Set<String>()
+    private let fileQueue = DispatchQueue(label: "downloads.files", qos: .utility)
 
-    private enum Stop { case pause, cancel }
-    private enum Outcome { case done(Int64), retry(Int), fail(Int) }
+    private enum Outcome {
+        /// A piece arrived (staged at this URL); `total` from Content-Range when known.
+        case piece(URL, total: Int64?, requested: Int64)
+        /// The server sent the whole file in one go (it ignores ranges).
+        case whole(URL)
+        /// Asked for bytes past the end: the file is complete.
+        case complete
+        case retry(Int)
+        case fail(Int)
+    }
 
     private let dir: URL
-    private let resumeDir: URL
     private let listFile: URL
 
     private override init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         dir = support.appendingPathComponent("Downloads", isDirectory: true)
-        resumeDir = support.appendingPathComponent("DownloadResume", isDirectory: true)
         listFile = support.appendingPathComponent("downloads.json")
         super.init()
-        for d in [dir, resumeDir] {
-            try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-        }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         var d = dir
         try? d.setResourceValues(values)
+        // Left over from the previous version.
+        try? FileManager.default.removeItem(at: support.appendingPathComponent("DownloadResume", isDirectory: true))
 
         let config = URLSessionConfiguration.background(withIdentifier: Downloads.sessionId)
         config.isDiscretionary = false
@@ -122,19 +136,21 @@ final class Downloads: NSObject, ObservableObject {
         }
         for item in items { status[item.key] = initialStatus(item) }
 
-        // Pick up a download that kept going while the app wasn't running.
+        // Back in the app: start a piece that iOS was holding back while the app was in the background.
+        NotificationCenter.default.addObserver(forName: Notification.Name("UIApplicationWillEnterForegroundNotification"),
+                                               object: nil, queue: .main) { [weak self] _ in
+            guard let self, let task = self.currentTask, task.countOfBytesReceived == 0 else { return }
+            self.stopping = true
+            self.currentTask = nil
+            self.currentKey = nil
+            task.cancel()
+            self.kick()
+        }
+
+        // Pieces started before the app was closed: forget them and continue from the saved file.
         session.getAllTasks { tasks in
             DispatchQueue.main.async {
-                for task in tasks {
-                    guard let dl = task as? URLSessionDownloadTask, let key = task.taskDescription else { continue }
-                    if self.currentTask == nil, task.state == .running, self.findByKey(key) != nil {
-                        self.currentTask = dl
-                        self.currentKey = key
-                        self.status[key]?.state = .running
-                    } else {
-                        task.cancel()
-                    }
-                }
+                for task in tasks { task.cancel() }
                 self.kick()
             }
         }
@@ -144,8 +160,9 @@ final class Downloads: NSObject, ObservableObject {
         let size = fileSize(file(item))
         if item.done && size > 0 { return DownloadStatus(state: .done, bytes: size, total: size) }
         if item.done { return DownloadStatus(state: .failed, bytes: 0, total: 0, reason: Downloads.reasonNeedsRedownload) }
-        if item.failedReason != 0 { return DownloadStatus(state: .failed, bytes: 0, total: item.total, reason: item.failedReason) }
-        return DownloadStatus(state: .queued, bytes: 0, total: item.total)
+        let part = fileSize(partFile(item))
+        if item.failedReason != 0 { return DownloadStatus(state: .failed, bytes: part, total: item.total, reason: item.failedReason) }
+        return DownloadStatus(state: .queued, bytes: part, total: item.total)
     }
 
     private func save() {
@@ -161,7 +178,10 @@ final class Downloads: NSObject, ObservableObject {
     }
 
     func file(_ item: DownloadItem) -> URL { dir.appendingPathComponent(item.fileName) }
-    private func resumeFile(_ key: String) -> URL { resumeDir.appendingPathComponent(key.replacingOccurrences(of: ":", with: "_")) }
+    private func partFile(_ item: DownloadItem) -> URL { dir.appendingPathComponent(item.fileName + ".part") }
+    private func pieceFile(_ key: String) -> URL {
+        dir.appendingPathComponent(key.replacingOccurrences(of: ":", with: "_") + ".piece")
+    }
 
     func find(_ kind: WatchKind, _ streamId: String) -> DownloadItem? {
         let key = WatchEntry.key(kind, streamId)
@@ -237,21 +257,22 @@ final class Downloads: NSObject, ObservableObject {
     func retry(_ item: DownloadItem) {
         replace(item.key) { $0.failedReason = 0 }
         attempts[item.key] = 0
-        status[item.key] = DownloadStatus(state: .queued, bytes: 0, total: item.total)
+        status[item.key] = DownloadStatus(state: .queued, bytes: fileSize(partFile(item)), total: item.total)
         save()
         kick()
     }
 
-    /// Cancels (if running) and deletes the file.
+    /// Cancels (if running) and deletes the files.
     func remove(_ item: DownloadItem) {
         if currentKey == item.key {
-            stopping = .cancel
+            stopping = true
             currentTask?.cancel()
             currentTask = nil
             currentKey = nil
         }
-        try? FileManager.default.removeItem(at: file(item))
-        try? FileManager.default.removeItem(at: resumeFile(item.key))
+        for url in [file(item), partFile(item), pieceFile(item.key)] {
+            try? FileManager.default.removeItem(at: url)
+        }
         items.removeAll { $0.key == item.key }
         status[item.key] = nil
         attempts[item.key] = nil
@@ -276,63 +297,82 @@ final class Downloads: NSObject, ObservableObject {
 
     // MARK: - Running the queue
 
-    /// Starts the next download if nothing is downloading.
+    /// Starts the next piece if nothing is downloading.
     func kick() {
         if !Thread.isMainThread {
             DispatchQueue.main.async { self.kick() }
             return
         }
-        guard session != nil, currentTask == nil, Connectivity.shared.isOnline, let item = next() else { return }
+        guard session != nil, currentTask == nil, !appending, Connectivity.shared.isOnline, let item = next() else { return }
         start(item)
     }
 
     private func start(_ item: DownloadItem) {
-        let task: URLSessionDownloadTask
-        let resume = resumeFile(item.key)
-        if let data = try? Data(contentsOf: resume) {
-            try? FileManager.default.removeItem(at: resume)
-            task = session.downloadTask(withResumeData: data)
-            resumed.insert(item.key)
-        } else {
-            resumed.remove(item.key)
-            guard let url = URL(string: item.url) else {
-                fail(item.key, Downloads.reasonNeedsRedownload)
-                return
-            }
-            var request = URLRequest(url: url)
-            request.setValue(Http.userAgent, forHTTPHeaderField: "User-Agent")
-            task = session.downloadTask(with: request)
+        guard let url = URL(string: item.url) else {
+            fail(item.key, Downloads.reasonNeedsRedownload)
+            return
         }
+        let have = fileSize(partFile(item))
+        if item.total > 0 && have >= item.total {
+            finish(item.key)
+            return
+        }
+        var request = URLRequest(url: url)
+        request.setValue(Http.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("bytes=\(have)-\(have + Downloads.chunkSize - 1)", forHTTPHeaderField: "Range")
+        let task = session.downloadTask(with: request)
         task.taskDescription = item.key
         currentTask = task
         currentKey = item.key
-        stopping = nil
+        pieceStart[item.key] = have
+        stopping = false
         let previous = status[item.key]
-        status[item.key] = DownloadStatus(state: .running, bytes: previous?.bytes ?? 0, total: item.total)
+        status[item.key] = DownloadStatus(state: .running, bytes: have, total: item.total, speed: previous?.speed ?? 0)
         task.resume()
     }
 
     private func pauseCurrent() {
         guard let task = currentTask, let key = currentKey else { return }
-        stopping = .pause
+        stopping = true
         currentTask = nil
         currentKey = nil
-        let resume = resumeFile(key)
-        task.cancel(byProducingResumeData: { data in
-            if let data { try? data.write(to: resume, options: .atomic) }
-        })
+        task.cancel()
         if var s = status[key] {
             s.state = .paused
             s.reason = Downloads.reasonStreaming
+            s.speed = 0
+            s.bytes = findByKey(key).map { fileSize(partFile($0)) } ?? s.bytes
             status[key] = s
         }
     }
 
     private func fail(_ key: String, _ reason: Int) {
         replace(key) { $0.failedReason = reason }
-        let total = findByKey(key)?.total ?? 0
-        status[key] = DownloadStatus(state: .failed, bytes: 0, total: total, reason: reason)
-        try? FileManager.default.removeItem(at: resumeFile(key))
+        let item = findByKey(key)
+        status[key] = DownloadStatus(state: .failed, bytes: item.map { fileSize(partFile($0)) } ?? 0,
+                                     total: item?.total ?? 0, reason: reason)
+        save()
+    }
+
+    /// The ".part" file is complete: give it its real name.
+    private func finish(_ key: String) {
+        guard let item = findByKey(key) else { return }
+        let dest = file(item)
+        try? FileManager.default.removeItem(at: dest)
+        do {
+            try FileManager.default.moveItem(at: partFile(item), to: dest)
+        } catch {
+            fail(key, Downloads.reasonNeedsRedownload)
+            return
+        }
+        let size = fileSize(dest)
+        replace(key) {
+            $0.done = true
+            $0.failedReason = 0
+            $0.total = size
+        }
+        status[key] = DownloadStatus(state: .done, bytes: size, total: size)
+        attempts[key] = nil
         save()
     }
 
@@ -346,6 +386,7 @@ final class Downloads: NSObject, ObservableObject {
         if var s = status[key] {
             s.state = .paused
             s.reason = Downloads.reasonRetrying
+            s.speed = 0
             status[key] = s
         }
         // Wait a little longer each time (the connection may be busy or flaky).
@@ -358,48 +399,128 @@ final class Downloads: NSObject, ObservableObject {
             self.kick()
         }
     }
+
+    /// Adds a finished piece to the ".part" file (off the main thread), then carries on.
+    private func appendPiece(_ key: String, piece: URL, total: Int64?, requested: Int64) {
+        guard let item = findByKey(key) else {
+            try? FileManager.default.removeItem(at: piece)
+            return
+        }
+        appending = true
+        let part = partFile(item)
+        fileQueue.async {
+            var failure: Int?
+            do {
+                if !FileManager.default.fileExists(atPath: part.path) {
+                    FileManager.default.createFile(atPath: part.path, contents: nil)
+                }
+                let out = try FileHandle(forWritingTo: part)
+                let input = try FileHandle(forReadingFrom: piece)
+                defer {
+                    try? out.close()
+                    try? input.close()
+                }
+                try out.seekToEnd()
+                while let block = try input.read(upToCount: 4 << 20), !block.isEmpty {
+                    try out.write(contentsOf: block)
+                }
+            } catch {
+                let ns = error as NSError
+                failure = ns.code == NSFileWriteOutOfSpaceError ? Downloads.reasonNoSpace : Downloads.reasonDropped
+            }
+            let pieceBytes = (try? FileManager.default.attributesOfItem(atPath: piece.path)[.size] as? NSNumber)?.int64Value ?? 0
+            try? FileManager.default.removeItem(at: piece)
+            DispatchQueue.main.async {
+                self.appending = false
+                defer { self.kick() }
+                guard self.findByKey(key) != nil else { return }
+                if let failure {
+                    if failure == Downloads.reasonNoSpace { self.fail(key, failure) } else { self.scheduleRetry(key, code: failure) }
+                    return
+                }
+                let have = self.fileSize(part)
+                if let total, total > 0, self.findByKey(key)?.total != total {
+                    self.replace(key) { $0.total = total }
+                    self.save()
+                }
+                let known = self.findByKey(key)?.total ?? 0
+                // Done when we reach the known size, or (size unknown) when a piece comes back short.
+                if (known > 0 && have >= known) || (known <= 0 && pieceBytes < requested) {
+                    self.finish(key)
+                } else {
+                    self.status[key]?.bytes = have
+                }
+            }
+        }
+    }
 }
 
 extension Downloads: URLSessionDownloadDelegate {
+    private func totalFromResponse(_ response: URLResponse?) -> Int64? {
+        guard let http = response as? HTTPURLResponse else { return nil }
+        // "Content-Range: bytes 0-33554431/2147483648"
+        if let range = http.value(forHTTPHeaderField: "Content-Range"),
+           let slash = range.lastIndex(of: "/"), let total = Int64(range[range.index(after: slash)...]) {
+            return total
+        }
+        if http.statusCode == 200, http.expectedContentLength > 0 { return http.expectedContentLength }
+        return nil
+    }
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
                     totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
         guard let key = downloadTask.taskDescription, downloadTask == currentTask else { return }
-        let total = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : (findByKey(key)?.total ?? 0)
+        if findByKey(key)?.total ?? 0 <= 0, let total = totalFromResponse(downloadTask.response) {
+            replace(key) { $0.total = total }
+        }
+        let total = findByKey(key)?.total ?? 0
+        let bytes = (pieceStart[key] ?? 0) + totalBytesWritten
         let now = Date()
         var speed = speeds[key] ?? 0
         if let last = lastPublish[key] {
             let dt = now.timeIntervalSince(last.time)
             if dt < 0.5 { return }
-            let instant = Double(max(totalBytesWritten - last.bytes, 0)) / dt
+            let instant = Double(max(bytes - last.bytes, 0)) / dt
             speed = speed > 0 ? speed * 0.8 + instant * 0.2 : instant
             speeds[key] = speed
         }
-        lastPublish[key] = (now, totalBytesWritten)
-        status[key] = DownloadStatus(state: .running, bytes: totalBytesWritten, total: total, speed: speed)
-        if total > 0, findByKey(key)?.total != total { replace(key) { $0.total = total } }
+        lastPublish[key] = (now, bytes)
+        status[key] = DownloadStatus(state: .running, bytes: bytes, total: total, speed: speed)
         attempts[key] = 0
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let key = downloadTask.taskDescription, let item = findByKey(key) else { return }
-        let code = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 200
-        guard (200..<300).contains(code) else {
-            switch code {
-            // 403/429/509 usually mean "connection limit reached" (e.g. a stream that only just
-            // stopped), so those are retried with a growing wait.
-            case 401, 404, 410: outcome[key] = .fail(code)
-            default: outcome[key] = .retry(code)
+        guard let key = downloadTask.taskDescription, findByKey(key) != nil else { return }
+        let http = downloadTask.response as? HTTPURLResponse
+        let code = http?.statusCode ?? 200
+        // The downloaded file is deleted when this returns, so move it now (a quick rename).
+        func stage() -> URL? {
+            let staged = pieceFile(key)
+            try? FileManager.default.removeItem(at: staged)
+            do {
+                try FileManager.default.moveItem(at: location, to: staged)
+                return staged
+            } catch {
+                return nil
             }
-            return
         }
-        let dest = file(item)
-        try? FileManager.default.removeItem(at: dest)
-        do {
-            try FileManager.default.moveItem(at: location, to: dest)
-            outcome[key] = .done(fileSize(dest))
-        } catch {
-            let ns = error as NSError
-            outcome[key] = ns.code == NSFileWriteOutOfSpaceError ? .fail(Downloads.reasonNoSpace) : .retry(Downloads.reasonDropped)
+        switch code {
+        case 206:
+            if let staged = stage() {
+                outcome[key] = .piece(staged, total: totalFromResponse(http), requested: Downloads.chunkSize)
+            } else {
+                outcome[key] = .retry(Downloads.reasonDropped)
+            }
+        case 200..<300:
+            if let staged = stage() { outcome[key] = .whole(staged) } else { outcome[key] = .retry(Downloads.reasonDropped) }
+        case 416:
+            outcome[key] = .complete
+        // 403/429/509 usually mean "connection limit reached" (e.g. a stream that only just
+        // stopped), so those are retried with a growing wait.
+        case 401, 404, 410:
+            outcome[key] = .fail(code)
+        default:
+            outcome[key] = .retry(code)
         }
     }
 
@@ -412,50 +533,53 @@ extension Downloads: URLSessionDownloadDelegate {
         }
         lastPublish[key] = nil
         speeds[key] = nil
-        let fromResume = resumed.remove(key) != nil
-        defer { kick() }
+        let result = outcome.removeValue(forKey: key)
 
         if let error {
-            let ns = error as NSError
-            if let data = ns.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
-                try? data.write(to: resumeFile(key), options: .atomic)
-            }
-            // Paused for streaming or removed: nothing more to do.
-            if ns.code == NSURLErrorCancelled && (!wasCurrent || stopping != nil) {
-                stopping = nil
+            // Paused for streaming, removed, or replaced: nothing more to do.
+            if !wasCurrent || stopping {
+                stopping = false
+                kick()
                 return
             }
-            guard findByKey(key) != nil else { return }
-            // The saved resume point didn't work: start the file again rather than failing.
-            if fromResume && ns.userInfo[NSURLSessionDownloadTaskResumeData] == nil {
-                try? FileManager.default.removeItem(at: resumeFile(key))
+            if findByKey(key) != nil {
+                let ns = error as NSError
+                if ns.code == NSURLErrorCannotWriteToFile || ns.code == NSFileWriteOutOfSpaceError {
+                    fail(key, Downloads.reasonNoSpace)
+                } else {
+                    scheduleRetry(key, code: Downloads.reasonDropped)
+                }
             }
-            if ns.code == NSURLErrorCannotWriteToFile || ns.code == NSFileWriteOutOfSpaceError {
-                fail(key, Downloads.reasonNoSpace)
-            } else {
-                scheduleRetry(key, code: Downloads.reasonDropped)
-            }
+            kick()
             return
         }
 
-        guard findByKey(key) != nil else { return }
-        switch outcome.removeValue(forKey: key) ?? .retry(Downloads.reasonDropped) {
-        case .done(let size):
-            replace(key) {
-                $0.done = true
-                $0.failedReason = 0
-                $0.total = size
+        guard wasCurrent, findByKey(key) != nil else {
+            if case .piece(let url, _, _) = result { try? FileManager.default.removeItem(at: url) }
+            if case .whole(let url) = result { try? FileManager.default.removeItem(at: url) }
+            kick()
+            return
+        }
+
+        switch result ?? .retry(Downloads.reasonDropped) {
+        case .piece(let url, let total, let requested):
+            appendPiece(key, piece: url, total: total, requested: requested)
+            return
+        case .whole(let url):
+            // The server ignores ranges and sent everything: that's the finished file.
+            if let item = findByKey(key) {
+                try? FileManager.default.removeItem(at: partFile(item))
+                try? FileManager.default.moveItem(at: url, to: partFile(item))
+                finish(key)
             }
-            status[key] = DownloadStatus(state: .done, bytes: size, total: size)
-            attempts[key] = nil
-            try? FileManager.default.removeItem(at: resumeFile(key))
-            save()
+        case .complete:
+            finish(key)
         case .fail(let reason):
             fail(key, reason)
         case .retry(let code):
-            try? FileManager.default.removeItem(at: resumeFile(key))
             scheduleRetry(key, code: code)
         }
+        kick()
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
