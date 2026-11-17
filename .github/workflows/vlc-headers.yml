@@ -1,0 +1,36 @@
+name: VLCKit 4 headers (temporary)
+on: workflow_dispatch
+jobs:
+  dump:
+    runs-on: macos-15
+    steps:
+      - name: Fetch VLCKit 4 and print its public headers
+        run: |
+          mkdir probe && cd probe
+          cat > Podfile <<'POD'
+          platform :ios, '16.0'
+          use_frameworks!
+          target 'Probe' do
+            pod 'VLCKit', '4.0.0a18'
+          end
+          POD
+          mkdir Probe
+          cat > project.yml <<'YML'
+          name: Probe
+          options: { deploymentTarget: { iOS: "16.0" } }
+          targets:
+            Probe:
+              type: application
+              platform: iOS
+              sources: [Probe]
+          YML
+          echo 'import Foundation' > Probe/main.swift
+          brew install xcodegen >/dev/null
+          xcodegen generate >/dev/null
+          pod install >/dev/null || pod install --repo-update
+          H=$(find Pods/VLCKit -path "*ios-arm64/*" -name "Headers" -type d | head -1)
+          echo "HEADERS DIR: $H"
+          ls "$H"
+          for f in VLCMediaPlayer.h VLCDrawable.h VLCMedia.h VLCTime.h VLCAudio.h VLCMediaPlayerTitleDescription.h; do
+            if [ -f "$H/$f" ]; then echo "==== $f ===="; grep -v '^\s*\*' "$H/$f" | grep -v '^\s*/\*\*' | grep -v '^\s*//' | grep -v '^\s*$'; fi
+          done
