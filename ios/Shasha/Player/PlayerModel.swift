@@ -75,6 +75,7 @@ final class PlayerModel: ObservableObject, Identifiable {
         // Downloads wait while we stream on plans that allow only one connection.
         Downloads.shared.setStreaming(items.contains { $0.isRemote })
         load(index, seekToSaved: !fromStart)
+        NowPlaying.shared.attach(self)
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -103,6 +104,7 @@ final class PlayerModel: ObservableObject, Identifiable {
         hideTask?.cancel()
         engine?.stop()
         engine = nil
+        NowPlaying.shared.detach(self)
         Downloads.shared.setStreaming(false)
     }
 
@@ -148,6 +150,7 @@ final class PlayerModel: ObservableObject, Identifiable {
 
     private func stateChanged(_ s: EngineState) {
         state = s
+        defer { NowPlaying.shared.update(force: true) }
         if s == .playing {
             if playingSince == nil { playingSince = Date() }
         } else {
@@ -208,6 +211,11 @@ final class PlayerModel: ObservableObject, Identifiable {
 
     // MARK: Controls
 
+    /// For the lock screen's separate play and pause buttons.
+    func setPlaying(_ on: Bool) {
+        if on != wantsPlay { togglePlay() }
+    }
+
     func togglePlay() {
         guard let engine else { return }
         if wantsPlay {
@@ -221,6 +229,7 @@ final class PlayerModel: ObservableObject, Identifiable {
             engine.play()
             wantsPlay = true
         }
+        NowPlaying.shared.update(force: true)
         showControls()
     }
 
@@ -403,6 +412,7 @@ final class PlayerModel: ObservableObject, Identifiable {
         }
         updateUpNext()
         checkPicture()
+        NowPlaying.shared.update()
         if let end = sleepEnd, Date() >= end {
             sleepEnd = nil
             sleepMinutes = 0
@@ -504,6 +514,7 @@ final class PlayerModel: ObservableObject, Identifiable {
         }
         if let next { lines.append(L("epg_next", next.title, f.string(from: next.start))) }
         epgLines = lines
+        NowPlaying.shared.update(force: true)
     }
 
     /// 0…1 through the current programme, for the live progress bar.
