@@ -63,6 +63,9 @@ final class AppNav: ObservableObject {
     @Published var tab: Tab = .home
     @Published var libraryShowsDownloads = false
     @Published var showSettings = false
+    /// Pages open on the Home tab (search, films, series). Everything is pushed by value so
+    /// SwiftUI never opens a page twice.
+    @Published var homePath = NavigationPath()
 
     func goToDownloads() {
         libraryShowsDownloads = true

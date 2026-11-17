@@ -1,19 +1,21 @@
 import SwiftUI
 
+/// Pages the Home tab can open besides films and series.
+enum HomeRoute: Hashable {
+    case search
+}
+
 struct HomeView: View {
     @ObservedObject private var session = Session.shared
     @State private var newMovies: [StreamItem] = []
     @State private var newSeries: [StreamItem] = []
-    @State private var opened: StreamItem?
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 Banners()
 
-                NavigationLink {
-                    SearchView()
-                } label: {
+                NavigationLink(value: HomeRoute.search) {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass")
                         Text(L("search_everything"))
@@ -38,7 +40,7 @@ struct HomeView: View {
                                     .frame(width: 220)
                             }
                             .buttonStyle(.plain)
-                            .contextMenu { HistoryMenu(entry: entry, onOpen: { opened = page(for: entry) }) }
+                            .contextMenu { HistoryMenu(entry: entry, onOpen: { AppNav.shared.homePath.append(page(for: entry)) }) }
                         }
                     }
                 }
@@ -109,8 +111,10 @@ struct HomeView: View {
         .navigationDestination(for: StreamItem.self) { item in
             DetailView(item: item)
         }
-        .navigationDestination(isPresented: Binding(get: { opened != nil }, set: { if !$0 { opened = nil } })) {
-            if let opened { DetailView(item: opened) }
+        .navigationDestination(for: HomeRoute.self) { route in
+            switch route {
+            case .search: SearchView()
+            }
         }
         .task(id: session.cacheVersion) { await loadNew() }
         .task(id: session.hideAdult) { await loadNew() }

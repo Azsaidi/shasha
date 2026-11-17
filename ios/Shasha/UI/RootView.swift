@@ -38,7 +38,7 @@ struct MainTabs: View {
 
     var body: some View {
         TabView(selection: $nav.tab) {
-            NavigationStack { HomeView() }
+            NavigationStack(path: $nav.homePath) { HomeView() }
                 .tabItem { Label(L("tab_home"), systemImage: "house.fill") }
                 .tag(AppNav.Tab.home)
             NavigationStack { BrowserView(type: .live) }
