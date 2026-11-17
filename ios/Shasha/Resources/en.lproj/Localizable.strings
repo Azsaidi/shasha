@@ -257,3 +257,8 @@
 "all_categories" = "All categories";
 "see_all" = "See all";
 "pip_unavailable" = "Picture-in-picture isn’t available until the video is showing.";
+"player" = "Player";
+"player_auto" = "Automatic";
+"player_apple" = "Apple player";
+"player_vlc" = "VLC";
+"player_hint" = "Automatic uses Apple’s player when it can and VLC for everything else. Apple’s player can’t play some films (like .mkv). Both support picture-in-picture.";

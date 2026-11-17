@@ -1,9 +1,10 @@
 # VLC plays the formats Apple's player can't (.ts live streams, .mkv films, ...).
+# VLCKit 4 (pre-release) is used for its picture-in-picture support.
 platform :ios, '16.0'
 use_frameworks!
 
 target 'Shasha' do
-  pod 'MobileVLCKit', '~> 3.6.0'
+  pod 'VLCKit', '4.0.0a18'
 end
 
 post_install do |installer|

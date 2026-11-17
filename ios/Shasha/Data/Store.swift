@@ -74,6 +74,12 @@ final class Store {
         set { defaults.set(newValue, forKey: "liveFormat") }
     }
 
+    /// "auto", "apple" or "vlc".
+    var player: String {
+        get { defaults.string(forKey: "player") ?? "auto" }
+        set { defaults.set(newValue, forKey: "player") }
+    }
+
     var hideAdult: Bool {
         get { defaults.object(forKey: "hideAdult") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "hideAdult") }

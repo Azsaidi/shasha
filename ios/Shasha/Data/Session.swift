@@ -378,6 +378,8 @@ final class Session: ObservableObject {
 
     /// Extension to request live channels in. Apple's player needs HLS (m3u8); TS goes through VLC.
     func liveExtension() -> String {
+        // Apple's player only plays live channels as HLS.
+        if Store.shared.player == "apple" { return "m3u8" }
         switch Store.shared.liveFormat {
         case "ts": return "ts"
         case "m3u8": return "m3u8"

@@ -192,7 +192,7 @@ final class PlayerModel: ObservableObject, Identifiable {
     /// Apple's player sometimes plays the sound but can't show the picture (4K HEVC inside TS
     /// segments, unusual codecs). Hand the stream to VLC instead.
     private func checkPicture() {
-        guard Engines.vlcAvailable, let since = playingSince, Date().timeIntervalSince(since) > 4,
+        guard Engines.vlcAvailable, PlayerChoice.current == .auto, let since = playingSince, Date().timeIntervalSince(since) > 4,
               let av = engine as? AVEngine, !av.showsPicture, !noPictureRetried.contains(index),
               let item = current else { return }
         noPictureRetried.insert(index)
@@ -282,7 +282,10 @@ final class PlayerModel: ObservableObject, Identifiable {
         } else if engine.canStartPip {
             engine.startPip()
         } else {
-            let reason = (engine as? AVEngine)?.pipProblem
+            var reason = (engine as? AVEngine)?.pipProblem
+            #if canImport(VLCKit)
+            if let vlc = engine as? VLCEngine { reason = vlc.pipProblem }
+            #endif
             Toast.shared.show(L("pip_unavailable") + (reason.map { " (\($0))" } ?? ""))
         }
     }

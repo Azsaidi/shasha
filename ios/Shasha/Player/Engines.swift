@@ -1,8 +1,8 @@
 import AVFoundation
 import AVKit
 import UIKit
-#if canImport(MobileVLCKit)
-import MobileVLCKit
+#if canImport(VLCKit)
+import VLCKit
 #endif
 
 enum EngineState: Equatable {
@@ -63,9 +63,24 @@ protocol PlaybackEngine: AnyObject {
     func selectSubtitle(_ id: String?)
 }
 
+/// Which player to use, chosen in Settings.
+enum PlayerChoice: String, CaseIterable {
+    case auto, apple, vlc
+
+    var labelKey: String {
+        switch self {
+        case .auto: return "player_auto"
+        case .apple: return "player_apple"
+        case .vlc: return "player_vlc"
+        }
+    }
+
+    static var current: PlayerChoice { PlayerChoice(rawValue: Store.shared.player) ?? .auto }
+}
+
 enum Engines {
     static var vlcAvailable: Bool {
-        #if canImport(MobileVLCKit)
+        #if canImport(VLCKit)
         return true
         #else
         return false
@@ -80,10 +95,21 @@ enum Engines {
     }
 
     static func make(for url: URL, preferVLC: Bool = false) -> PlaybackEngine {
-        #if canImport(MobileVLCKit)
-        if preferVLC || !usesApple(url) { return VLCEngine() }
-        #endif
-        return AVEngine()
+        switch PlayerChoice.current {
+        case .apple:
+            return AVEngine()
+        case .vlc:
+            #if canImport(VLCKit)
+            return VLCEngine()
+            #else
+            return AVEngine()
+            #endif
+        case .auto:
+            #if canImport(VLCKit)
+            if preferVLC || !usesApple(url) { return VLCEngine() }
+            #endif
+            return AVEngine()
+        }
     }
 }
 
@@ -343,10 +369,26 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
 
 // MARK: - VLC
 
-#if canImport(MobileVLCKit)
+#if canImport(VLCKit)
+/// The view VLC draws into. Conforming to VLCPictureInPictureDrawable turns on VLC's
+/// picture-in-picture: VLC hands back a controller through `pictureInPictureReady`.
+final class VLCVideoView: UIView, VLCPictureInPictureDrawable {
+    weak var engine: VLCEngine?
+
+    func mediaController() -> VLCPictureInPictureMediaControlling! {
+        engine
+    }
+
+    func pictureInPictureReady() -> ((VLCPictureInPictureWindowControlling?) -> Void)! {
+        { [weak self] controller in
+            DispatchQueue.main.async { self?.engine?.pipReady(controller) }
+        }
+    }
+}
+
 /// Hosts VLC's video and scales it for "fill" and "stretch" (VLC itself always fits).
 final class VLCSurface: UIView {
-    let video = UIView()
+    let video = VLCVideoView()
     var gravity: VideoGravity = .fit { didSet { setNeedsLayout() } }
     var videoSize: CGSize = .zero { didSet { if oldValue != videoSize { setNeedsLayout() } } }
 
@@ -378,15 +420,19 @@ final class VLCSurface: UIView {
     }
 }
 
-final class VLCEngine: NSObject, PlaybackEngine {
+final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControlling {
     private let player = VLCMediaPlayer()
     private let surface = VLCSurface()
     private var timer: Timer?
     private var reported: EngineState?
     private var hadPlayback = false
-    private var pendingStart: Double = 0
+    private var stoppedByUs = false
     private var storedVolume: Float = 1
     private var isMuted = false
+    private var lastPollTime: Double = -1
+    private var pipController: VLCPictureInPictureWindowControlling?
+    private var pipOn = false
+    private var resignObserver: Any?
 
     var view: UIView { surface }
     var onState: ((EngineState) -> Void)?
@@ -394,11 +440,20 @@ final class VLCEngine: NSObject, PlaybackEngine {
 
     override init() {
         super.init()
+        surface.video.engine = self
         player.drawable = surface.video
+        // Leaving the app while playing: carry on in picture-in-picture (if turned on in Settings).
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("UIApplicationWillResignActiveNotification"), object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, Store.shared.autoPip, self.player.isPlaying, !self.pipOn, self.surface.window != nil else { return }
+            self.pipController?.startPictureInPicture()
+        }
     }
 
     deinit {
         timer?.invalidate()
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
         player.stop()
     }
 
@@ -406,25 +461,27 @@ final class VLCEngine: NSObject, PlaybackEngine {
         guard reported != state else { return }
         reported = state
         onState?(state)
+        pipController?.invalidatePlaybackState()
     }
 
     func load(_ url: URL, start: Double) {
         reported = nil
         hadPlayback = false
-        report(.loading)
+        stoppedByUs = false
         lastPollTime = -1
-        let media = VLCMedia(url: url)
+        report(.loading)
+        guard let media = VLCMedia(url: url) else {
+            report(.failed(L("err_stream_generic", "VLC")))
+            return
+        }
         media.addOption(":http-user-agent=\(Http.userAgent)")
         media.addOption(":network-caching=1500")
         if start > 0 { media.addOption(":start-time=\(Int(start))") }
-        pendingStart = start
         player.media = media
         player.play()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in self?.poll() }
     }
-
-    private var lastPollTime: Double = -1
 
     private func poll() {
         surface.videoSize = player.videoSize
@@ -444,27 +501,25 @@ final class VLCEngine: NSObject, PlaybackEngine {
             report(.paused)
         case .opening, .buffering:
             if player.isPlaying && hadPlayback { report(.playing) } else { report(.loading) }
-        case .ended:
-            report(hadPlayback ? .ended : .failed(L("err_stream_generic", "VLC")))
         case .error:
             report(.failed(hadPlayback ? L("err_stream_network") : L("err_stream_generic", "VLC")))
-        case .stopped:
-            if hadPlayback, reported != nil, reported != .loading { report(.ended) }
-        default:
+        case .stopped, .stopping:
+            // VLC 4 has no "ended" state: stopping by itself after playing means it reached the end.
+            if hadPlayback && !stoppedByUs {
+                report(.ended)
+            } else if !hadPlayback && reported == .loading && !stoppedByUs && lastPollTime >= 0 {
+                report(.failed(L("err_stream_generic", "VLC")))
+            }
+        @unknown default:
             if player.isPlaying { report(.playing) }
         }
     }
 
-    private func ms(_ time: VLCTime?) -> Double {
-        guard let time else { return 0 }
-        return Double(time.intValue) / 1000
-    }
-
-    var position: Double { ms(player.time as VLCTime?) }
+    var position: Double { Double(player.time.intValue) / 1000 }
 
     var duration: Double {
-        guard let media = player.media as VLCMedia? else { return 0 }
-        return max(ms(media.length as VLCTime?), 0)
+        guard let media = player.media else { return 0 }
+        return max(Double(media.length.intValue) / 1000, 0)
     }
 
     var isPlaying: Bool { player.isPlaying }
@@ -496,9 +551,8 @@ final class VLCEngine: NSObject, PlaybackEngine {
     func play() {
         if reported == .ended {
             reported = nil
-            player.stop()
-            player.play()
-            return
+            hadPlayback = false
+            if let media = player.media { player.media = media }
         }
         player.play()
     }
@@ -510,40 +564,71 @@ final class VLCEngine: NSObject, PlaybackEngine {
     }
 
     func stop() {
+        stoppedByUs = true
         timer?.invalidate()
         timer = nil
+        pipController?.stopPictureInPicture()
         player.stop()
     }
 
-    var supportsPip: Bool { false }
-    var canStartPip: Bool { false }
-    var pipActive: Bool { false }
-    func startPip() {}
-    func stopPip() {}
+    // Picture-in-picture
 
-    private func names(_ list: [Any]?) -> [String] { (list ?? []).map { "\($0)" } }
-    private func indexes(_ list: [Any]?) -> [Int32] { (list ?? []).compactMap { ($0 as? NSNumber)?.int32Value } }
+    fileprivate func pipReady(_ controller: VLCPictureInPictureWindowControlling?) {
+        pipController = controller
+        controller?.stateChangeEventHandler = { [weak self] started in
+            DispatchQueue.main.async {
+                self?.pipOn = started
+                self?.onPipChange?(started)
+            }
+        }
+    }
+
+    var supportsPip: Bool { AVPictureInPictureController.isPictureInPictureSupported() }
+    var canStartPip: Bool { pipController != nil && player.hasVideoOut }
+    var pipActive: Bool { pipOn }
+    func startPip() { pipController?.startPictureInPicture() }
+    func stopPip() { pipController?.stopPictureInPicture() }
+
+    /// Why picture-in-picture can't start, for the message shown instead.
+    var pipProblem: String? {
+        if !player.hasVideoOut { return "no-picture" }
+        if pipController == nil { return "vlc-not-ready" }
+        return nil
+    }
+
+    // VLCPictureInPictureMediaControlling: what the picture-in-picture window's buttons do.
+
+    func mediaLength() -> Int64 { Int64(player.media?.length.intValue ?? 0) }
+    func mediaTime() -> Int64 { Int64(player.time.intValue) }
+    func isMediaSeekable() -> Bool { player.isSeekable }
+    func isMediaPlaying() -> Bool { player.isPlaying }
+
+    func seek(by offset: Int64, completion: @escaping () -> Void) {
+        let target = max(Int64(player.time.intValue) + offset, 0)
+        player.time = VLCTime(int: Int32(clamping: target))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: completion)
+    }
+
+    // Tracks
 
     var audioTracks: [MediaTrack] {
-        let n = names(player.audioTrackNames as [Any]?)
-        let ids = indexes(player.audioTrackIndexes as [Any]?)
-        let current = player.currentAudioTrackIndex
-        return zip(ids, n).filter { $0.0 >= 0 }.map { MediaTrack(id: "\($0.0)", name: $0.1, selected: $0.0 == current) }
+        player.audioTracks.map { MediaTrack(id: $0.trackId, name: $0.trackName, selected: $0.isSelected) }
     }
 
     var subtitleTracks: [MediaTrack] {
-        let n = names(player.videoSubTitlesNames as [Any]?)
-        let ids = indexes(player.videoSubTitlesIndexes as [Any]?)
-        let current = player.currentVideoSubTitleIndex
-        return zip(ids, n).filter { $0.0 >= 0 }.map { MediaTrack(id: "\($0.0)", name: $0.1, selected: $0.0 == current) }
+        player.textTracks.map { MediaTrack(id: $0.trackId, name: $0.trackName, selected: $0.isSelected) }
     }
 
     func selectAudio(_ id: String) {
-        if let i = Int32(id) { player.currentAudioTrackIndex = i }
+        player.audioTracks.first { $0.trackId == id }?.isSelectedExclusively = true
     }
 
     func selectSubtitle(_ id: String?) {
-        player.currentVideoSubTitleIndex = id.flatMap { Int32($0) } ?? -1
+        if let id, let track = player.textTracks.first(where: { $0.trackId == id }) {
+            track.isSelectedExclusively = true
+        } else {
+            player.deselectAllTextTracks()
+        }
     }
 }
 #endif

@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var editing = false
     @State private var showPassword = false
     @State private var liveFormat = Store.shared.liveFormat
+    @State private var player = PlayerChoice.current
     @State private var autoPip = Store.shared.autoPip
     @State private var autoRefresh = Store.shared.autoRefreshDays
     @State private var confirmHistory = false
@@ -78,6 +79,17 @@ struct SettingsView: View {
                         }
                     }
                     .onChange(of: autoPip) { Store.shared.autoPip = $0 }
+                }
+
+                Section {
+                    Picker(L("player"), selection: $player) {
+                        ForEach(PlayerChoice.allCases, id: \.self) { choice in
+                            Text(L(choice.labelKey)).tag(choice)
+                        }
+                    }
+                    .onChange(of: player) { Store.shared.player = $0.rawValue }
+                } footer: {
+                    Text(L("player_hint"))
                 }
 
                 Section {
