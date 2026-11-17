@@ -1,0 +1,67 @@
+# Codemagic: builds the native iOS app in ios/ and ships it to TestFlight.
+# (The Android APK is built by GitHub Actions; see .github/workflows/build.yml.)
+#
+# Uses the same setup as Mawaqity:
+#   - App Store Connect integration named "Apps"
+#   - variable group "ios_signing" with CERTIFICATE_PRIVATE_KEY
+# One-time: create the app in App Store Connect with bundle ID com.azsaidi.shasha
+# (the first run registers the bundle ID and signing files if they're missing).
+
+workflows:
+  ios-testflight:
+    name: Shasha iOS → TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: "Apps"
+    environment:
+      groups:
+        - ios_signing
+      vars:
+        BUNDLE_ID: "com.azsaidi.shasha"
+        XCODE_WORKSPACE: "ios/Shasha.xcworkspace"
+        XCODE_SCHEME: "Shasha"
+      xcode: latest
+      cocoapods: default
+    triggering:
+      events: []
+    scripts:
+      - name: Generate Xcode project
+        script: |
+          set -euo pipefail
+          brew install xcodegen
+          cd ios
+          xcodegen generate
+      - name: Install VLC (CocoaPods)
+        script: |
+          set -euo pipefail
+          cd ios
+          pod install --repo-update
+      - name: Set version and build number
+        script: |
+          set -euo pipefail
+          cd ios
+          agvtool new-version -all "$BUILD_NUMBER"
+      - name: Set up code signing
+        script: |
+          set -e
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --certificate-key="@env:CERTIFICATE_PRIVATE_KEY" \
+            --create \
+            --verbose
+          keychain add-certificates
+          xcode-project use-profiles --project "ios/Shasha.xcodeproj" --verbose
+      - name: Build IPA
+        script: |
+          xcode-project build-ipa \
+            --workspace "$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true

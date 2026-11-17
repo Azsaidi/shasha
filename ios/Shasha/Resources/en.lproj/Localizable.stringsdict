@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>expires_in</key><dict>
+<key>NSStringLocalizedFormatKey</key><string>%1$#@count@</string>
+<key>count</key><dict>
+<key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+<key>NSStringFormatValueTypeKey</key><string>d</string>
+<key>one</key><string>Your subscription ends in %1$d day (%2$@).</string>
+<key>other</key><string>Your subscription ends in %1$d days (%2$@).</string>
+</dict></dict>
+<key>seasons</key><dict>
+<key>NSStringLocalizedFormatKey</key><string>%1$#@count@</string>
+<key>count</key><dict>
+<key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+<key>NSStringFormatValueTypeKey</key><string>d</string>
+<key>one</key><string>%1$d season</string>
+<key>other</key><string>%1$d seasons</string>
+</dict></dict>
+<key>episodes_downloading</key><dict>
+<key>NSStringLocalizedFormatKey</key><string>%1$#@count@</string>
+<key>count</key><dict>
+<key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+<key>NSStringFormatValueTypeKey</key><string>d</string>
+<key>one</key><string>Downloading %1$d episode</string>
+<key>other</key><string>Downloading %1$d episodes</string>
+</dict></dict>
+</dict></plist>

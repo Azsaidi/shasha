@@ -1,0 +1,8 @@
+# Generated on the build machine
+Shasha.xcodeproj/
+Shasha.xcworkspace/
+Pods/
+Podfile.lock
+build/
+DerivedData/
+Shasha/Info.plist

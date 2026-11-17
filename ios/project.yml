@@ -1,0 +1,69 @@
+name: Shasha
+options:
+  bundleIdPrefix: com.azsaidi
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    VERSIONING_SYSTEM: apple-generic
+targets:
+  Shasha:
+    type: application
+    platform: iOS
+    sources:
+      - path: Shasha
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.azsaidi.shasha
+        PRODUCT_NAME: Shasha
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_BITCODE: NO
+        CODE_SIGN_STYLE: Manual
+        SUPPORTS_MACCATALYST: NO
+    info:
+      path: Shasha/Info.plist
+      properties:
+        CFBundleDisplayName: Shasha
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, ar]
+        LSRequiresIPhoneOS: true
+        UILaunchScreen:
+          UIColorName: AccentColor
+          UIImageRespectsSafeAreaInsets: true
+        UIApplicationSupportsIndirectInputEvents: true
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIUserInterfaceStyle: Dark
+        ITSAppUsesNonExemptEncryption: false
+        # IPTV servers are usually plain http.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsArbitraryLoadsForMedia: true
+        # Keep playing in picture-in-picture and in the background.
+        UIBackgroundModes: [audio]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+schemes:
+  Shasha:
+    build:
+      targets:
+        Shasha: all
+    run:
+      config: Debug
+    archive:
+      config: Release

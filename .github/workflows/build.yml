@@ -3,6 +3,8 @@ name: Build APK
 on:
   push:
     branches: [main]
+    # iOS-only changes don't need a new APK.
+    paths-ignore: ["ios/**", "codemagic.yaml", ".github/workflows/ios-check.yml"]
   workflow_dispatch:
 
 permissions:

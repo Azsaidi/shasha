@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>expires_in</key><dict>
+<key>NSStringLocalizedFormatKey</key><string>%1$#@count@</string>
+<key>count</key><dict>
+<key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+<key>NSStringFormatValueTypeKey</key><string>d</string>
+<key>zero</key><string>ينتهي اشتراكك اليوم (%2$@).</string>
+<key>one</key><string>ينتهي اشتراكك بعد يوم واحد (%2$@).</string>
+<key>two</key><string>ينتهي اشتراكك بعد يومين (%2$@).</string>
+<key>few</key><string>ينتهي اشتراكك بعد %1$d أيام (%2$@).</string>
+<key>many</key><string>ينتهي اشتراكك بعد %1$d يومًا (%2$@).</string>
+<key>other</key><string>ينتهي اشتراكك بعد %1$d يوم (%2$@).</string>
+</dict></dict>
+<key>seasons</key><dict>
+<key>NSStringLocalizedFormatKey</key><string>%1$#@count@</string>
+<key>count</key><dict>
+<key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+<key>NSStringFormatValueTypeKey</key><string>d</string>
+<key>zero</key><string>لا مواسم</string>
+<key>one</key><string>موسم واحد</string>
+<key>two</key><string>موسمان</string>
+<key>few</key><string>%1$d مواسم</string>
+<key>many</key><string>%1$d موسمًا</string>
+<key>other</key><string>%1$d موسم</string>
+</dict></dict>
+<key>episodes_downloading</key><dict>
+<key>NSStringLocalizedFormatKey</key><string>%1$#@count@</string>
+<key>count</key><dict>
+<key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+<key>NSStringFormatValueTypeKey</key><string>d</string>
+<key>zero</key><string>لا حلقات للتنزيل</string>
+<key>one</key><string>جارٍ تنزيل حلقة واحدة</string>
+<key>two</key><string>جارٍ تنزيل حلقتين</string>
+<key>few</key><string>جارٍ تنزيل %1$d حلقات</string>
+<key>many</key><string>جارٍ تنزيل %1$d حلقة</string>
+<key>other</key><string>جارٍ تنزيل %1$d حلقة</string>
+</dict></dict>
+</dict></plist>
