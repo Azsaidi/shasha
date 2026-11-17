@@ -1,3 +1,6 @@
+// Plain (non-mirrored) speaker icons on purpose, so they don't flip in Arabic.
+@file:Suppress("DEPRECATION")
+
 package com.azsaidi.shasha.player
 
 import android.content.Context
@@ -35,9 +38,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.VolumeDown
-import androidx.compose.material.icons.automirrored.filled.VolumeOff
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.VolumeDown
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
@@ -360,7 +363,7 @@ class MultiViewActivity : ComponentActivity() {
                             val index = items.indexOf(item)
                             Tile(
                                 item = item,
-                                isSelected = index == selected,
+                                isSelected = index == selected && controlsVisible,
                                 showLabel = controlsVisible,
                                 focus = tileFocus[index.coerceIn(0, MultiView.MAX - 1)],
                                 onFocused = { selected = index },
@@ -435,9 +438,10 @@ class MultiViewActivity : ComponentActivity() {
         Box(
             modifier
                 .padding(2.dp)
+                // The blue outline only shows while the controls are up; otherwise just a thin divider.
                 .border(
                     width = if (isSelected) 3.dp else 1.dp,
-                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color(0xFF22262E),
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color(0xFF15181D),
                 )
                 .focusRequester(focus)
                 .onFocusChanged { if (it.isFocused) onFocused() }
@@ -479,7 +483,7 @@ class MultiViewActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
-                        if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                        if (isMuted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
                         contentDescription = null,
                         tint = Color.White,
                         modifier = Modifier.size(16.dp),
@@ -527,11 +531,11 @@ class MultiViewActivity : ComponentActivity() {
                         Modifier.focusRequester(firstFocus),
                     ) { togglePlay(item.key) }
                     BarButton(
-                        if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                        if (isMuted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
                         stringResource(if (isMuted) R.string.unmute else R.string.mute),
                     ) { toggleMute(item.key) }
-                    BarButton(Icons.AutoMirrored.Filled.VolumeDown, stringResource(R.string.volume_down)) { changeVolume(item.key, -0.1f) }
-                    BarButton(Icons.AutoMirrored.Filled.VolumeUp, stringResource(R.string.volume_up)) { changeVolume(item.key, +0.1f) }
+                    BarButton(Icons.Filled.VolumeDown, stringResource(R.string.volume_down)) { changeVolume(item.key, -0.1f) }
+                    BarButton(Icons.Filled.VolumeUp, stringResource(R.string.volume_up)) { changeVolume(item.key, +0.1f) }
                     BarButton(
                         if (isSolo) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
                         stringResource(if (isSolo) R.string.split_show_all else R.string.split_full_screen),
