@@ -312,7 +312,7 @@ func friendlyError(_ error: Error) -> String {
         case NSURLErrorTimedOut: return L("err_timeout")
         case NSURLErrorCannotConnectToHost: return L("err_connect")
         case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted: return L("err_ssl")
-        default: return L("err_network")
+        default: return "\(L("err_network")) (\(ns.code))"
         }
     }
     return L("err_generic")

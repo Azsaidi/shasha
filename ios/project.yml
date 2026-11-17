@@ -43,10 +43,10 @@ targets:
         UIStatusBarStyle: UIStatusBarStyleLightContent
         UIUserInterfaceStyle: Dark
         ITSAppUsesNonExemptEncryption: false
-        # IPTV servers are usually plain http.
+        # IPTV servers are usually plain http. Only NSAllowsArbitraryLoads: adding
+        # NSAllowsArbitraryLoadsForMedia makes iOS ignore it and block http again.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-          NSAllowsArbitraryLoadsForMedia: true
         # Keep playing in picture-in-picture and in the background.
         UIBackgroundModes: [audio]
         UISupportedInterfaceOrientations:
