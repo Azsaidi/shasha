@@ -64,6 +64,11 @@ object Store {
         get() = prefs.getBoolean("hide_adult", false)
         set(value) = prefs.edit().putBoolean("hide_adult", value).apply()
 
+    /** Re-download the lists in the background when older than this many days (0 = never). */
+    var autoRefreshDays: Int
+        get() = prefs.getInt("auto_refresh_days", 7)
+        set(value) = prefs.edit().putInt("auto_refresh_days", value).apply()
+
     /** Go to picture-in-picture when leaving the app during playback. */
     var autoPip: Boolean
         get() = prefs.getBoolean("auto_pip", true)

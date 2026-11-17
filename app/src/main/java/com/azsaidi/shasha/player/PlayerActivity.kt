@@ -392,6 +392,11 @@ class PlayerActivity : ComponentActivity() {
         topBar.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         topBar.addView(sleepView, pillParams())
         topBar.addView(resizeView, pillParams())
+        // Adds what's playing to split screen, to watch it alongside other streams.
+        topBar.addView(pill(getString(R.string.split_short)) {
+            val current = player?.let { items.getOrNull(it.currentMediaItemIndex) }
+            MultiView.add(this, current)
+        }, pillParams())
         if (pipSupported()) topBar.addView(pill(getString(R.string.pip)) { enterPip() }, pillParams())
 
         playerView = PlayerView(this).apply {

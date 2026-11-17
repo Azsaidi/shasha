@@ -187,17 +187,6 @@ private fun HomeShelves(
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item { ExpiryBanner() }
 
-        if (continueWatching.isEmpty() && recentChannels.isEmpty() && favorites.isEmpty()) {
-            item {
-                Text(
-                    stringResource(R.string.home_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                )
-            }
-        }
-
         if (continueWatching.isNotEmpty()) {
             shelf(R.string.continue_watching) {
                 items(continueWatching, key = { it.key }) { entry ->

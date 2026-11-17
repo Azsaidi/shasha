@@ -44,6 +44,11 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Button
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FilterList
@@ -117,6 +122,7 @@ import com.azsaidi.shasha.data.Library
 import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.Store
 import com.azsaidi.shasha.data.StreamItem
+import com.azsaidi.shasha.player.MultiView
 import com.azsaidi.shasha.player.Playback
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -131,6 +137,7 @@ private enum class HomeTab(@StringRes val label: Int, val icon: ImageVector) {
     MOVIES(R.string.tab_movies, Icons.Filled.Movie),
     SERIES(R.string.tab_series, Icons.Filled.VideoLibrary),
     FAVOURITES(R.string.tab_favourites, Icons.Filled.Favorite),
+    DOWNLOADS(R.string.tab_downloads, Icons.Filled.Download),
     SETTINGS(R.string.tab_settings, Icons.Filled.Settings),
 }
 
@@ -192,6 +199,7 @@ fun HomeScreen(
     val content: @Composable () -> Unit = {
         Column(Modifier.fillMaxSize()) {
             RefreshBanner()
+            SplitScreenBanner()
             Box(
                 Modifier
                     .weight(1f)
@@ -204,6 +212,7 @@ fun HomeScreen(
                         HomeTab.MOVIES -> ContentTab(ContentType.MOVIE, open)
                         HomeTab.SERIES -> ContentTab(ContentType.SERIES, open)
                         HomeTab.FAVOURITES -> FavouritesTab(open)
+                        HomeTab.DOWNLOADS -> DownloadsTab()
                         HomeTab.SETTINGS -> SettingsTab(onSwitchAccount, onEditAccount, onAccountRemoved)
                     }
                 }
@@ -284,6 +293,46 @@ fun HomeScreen(
 /** Throws away cached lists and downloads them again (progress shows in [RefreshBanner]). */
 internal fun refreshContent() {
     Session.refreshAll()
+}
+
+/** Shown while streams are picked for split screen: how many, Watch and Clear. */
+@Composable
+private fun SplitScreenBanner() {
+    val items = MultiView.items.toList()
+    if (items.isEmpty()) return
+    val context = LocalContext.current
+    val max = Session.auth?.maxConnections?.toIntOrNull()
+    Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.GridView, contentDescription = null)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.split_banner, items.size), style = MaterialTheme.typography.titleSmall)
+                Text(
+                    items.joinToString(" · ") { it.title },
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (max != null && items.size > max) {
+                    Text(
+                        stringResource(R.string.split_connections, max.toString()),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            TextButton(onClick = { MultiView.clear() }, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) {
+                Text(stringResource(R.string.clear))
+            }
+            Button(onClick = { MultiView.open(context) }, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) {
+                Text(stringResource(R.string.watch))
+            }
+        }
+    }
 }
 
 @Composable
@@ -949,6 +998,8 @@ private fun SettingsTab(
     val language = remember { Language.current(context) }
     var confirmRemove by remember { mutableStateOf(false) }
     var confirmClearHistory by remember { mutableStateOf(false) }
+    var showPassword by remember { mutableStateOf(false) }
+    var autoRefresh by remember { mutableIntStateOf(Store.autoRefreshDays) }
     var confirmClearSearches by remember { mutableStateOf(false) }
 
     Column(
@@ -973,6 +1024,25 @@ private fun SettingsTab(
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 InfoLine(stringResource(R.string.server), account.server)
                 InfoLine(stringResource(R.string.username), account.username)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.password),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(110.dp),
+                    )
+                    Text(
+                        if (showPassword) account.password else "•".repeat(account.password.length.coerceIn(6, 12)),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    IconButton(onClick = { showPassword = !showPassword }, modifier = Modifier.focusRing(CircleShape)) {
+                        Icon(
+                            if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                            contentDescription = stringResource(if (showPassword) R.string.hide_password else R.string.show_password),
+                        )
+                    }
+                }
                 InfoLine(stringResource(R.string.status), auth?.status?.replaceFirstChar { it.uppercase() } ?: stringResource(R.string.checking))
                 InfoLine(
                     stringResource(R.string.expires),
@@ -1026,6 +1096,26 @@ private fun SettingsTab(
                 autoPip = it
                 Store.autoPip = it
             },
+        )
+
+        Text(stringResource(R.string.auto_refresh), style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(0 to R.string.refresh_off, 3 to R.string.refresh_3_days, 7 to R.string.refresh_week).forEach { (days, label) ->
+                FilterChip(
+                    selected = autoRefresh == days,
+                    onClick = {
+                        autoRefresh = days
+                        Store.autoRefreshDays = days
+                    },
+                    label = { Text(stringResource(label)) },
+                    modifier = Modifier.focusRing(RoundedCornerShape(8.dp)),
+                )
+            }
+        }
+        Text(
+            stringResource(R.string.auto_refresh_desc),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         Text(stringResource(R.string.live_format), style = MaterialTheme.typography.titleSmall)

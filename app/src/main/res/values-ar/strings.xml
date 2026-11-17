@@ -101,7 +101,7 @@
     <string name="remove_account">إزالة هذا الحساب</string>
     <string name="remove_account_title">إزالة %1$s؟</string>
     <string name="remove_account_body">ستُحذف بيانات الدخول والمفضلة وسجل المشاهدة لهذا الحساب من هذا الجهاز.</string>
-    <string name="version_line">شاشة %1$s · مجاني وبلا إعلانات</string>
+    <string name="version_line">شاشة %1$s</string>
     <string name="no_account_open">لا يوجد حساب مفتوح</string>
     <string name="choose_account">اختر حسابًا</string>
 
@@ -211,4 +211,45 @@
     <string name="searches_cleared">تم مسح سجل البحث</string>
     <string name="remove_search">إزالة من عمليات البحث الأخيرة</string>
     <string name="history_section">السجل</string>
+    <string name="tab_downloads">التنزيلات</string>
+    <string name="download">تنزيل</string>
+    <string name="download_season">تنزيل الموسم %1$d</string>
+    <string name="downloading_pct">جارٍ التنزيل… %1$d%%</string>
+    <string name="downloading">جارٍ التنزيل…</string>
+    <string name="downloaded">تم التنزيل</string>
+    <string name="download_queued">في انتظار التنزيل</string>
+    <string name="download_paused">متوقف مؤقتًا بانتظار الشبكة</string>
+    <string name="download_failed">فشل التنزيل</string>
+    <string name="delete_download">حذف التنزيل</string>
+    <string name="cancel_download">إلغاء التنزيل</string>
+    <string name="retry_download">إعادة محاولة التنزيل</string>
+    <string name="downloads_empty">لا توجد تنزيلات بعد</string>
+    <string name="downloads_empty_hint">نزّل الأفلام أو الحلقات أو مواسم كاملة من صفحاتها لمشاهدتها دون إنترنت.</string>
+    <string name="storage_line">تستخدم التنزيلات %1$s · المتاح %2$s على هذا الجهاز</string>
+    <string name="download_started">جارٍ تنزيل «%1$s»</string>
+    <plurals name="episodes_downloading">
+        <item quantity="zero">لا حلقات للتنزيل</item>
+        <item quantity="one">جارٍ تنزيل حلقة واحدة</item>
+        <item quantity="two">جارٍ تنزيل حلقتين</item>
+        <item quantity="few">جارٍ تنزيل %1$d حلقات</item>
+        <item quantity="many">جارٍ تنزيل %1$d حلقة</item>
+        <item quantity="other">جارٍ تنزيل %1$d حلقة</item>
+    </plurals>
+    <string name="download_error">تعذّر بدء التنزيل</string>
+    <string name="season_all_downloaded">هذا الموسم منزّل بالفعل</string>
+    <string name="auto_refresh">تحديث القوائم تلقائيًا</string>
+    <string name="auto_refresh_desc">ينزّل قوائم القنوات والأفلام والمسلسلات الجديدة في الخلفية عندما تصبح قديمة.</string>
+    <string name="refresh_off">إيقاف</string>
+    <string name="refresh_3_days">كل 3 أيام</string>
+    <string name="refresh_week">كل أسبوع</string>
+    <string name="split_screen">تقسيم الشاشة</string>
+    <string name="add_split">إضافة إلى تقسيم الشاشة</string>
+    <string name="split_added">أُضيف إلى تقسيم الشاشة (%1$d من 4)</string>
+    <string name="split_full">يحتوي تقسيم الشاشة على 4 بثوث بالفعل</string>
+    <string name="split_banner">تقسيم الشاشة: %1$d مختار</string>
+    <string name="watch">مشاهدة</string>
+    <string name="split_connections">يسمح حسابك بـ %1$s بث في الوقت نفسه، لذا قد لا تعمل بعض النوافذ.</string>
+    <string name="split_hint">OK: ملء الشاشة · اضغط مطولًا: إزالة</string>
+    <string name="split_removed">أُزيل من تقسيم الشاشة</string>
+    <string name="split_short">تقسيم</string>
 </resources>

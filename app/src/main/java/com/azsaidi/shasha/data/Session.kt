@@ -31,7 +31,6 @@ data class RefreshState(
 /** The account currently open, its catalogue (memory + disk cache), favorites and watch history. */
 object Session {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private const val STALE_AFTER_MS = 24 * 60 * 60 * 1000L
 
     var account by mutableStateOf<Account?>(null)
         private set
@@ -144,7 +143,8 @@ object Session {
         if (disk != null) {
             val (library, savedAt) = disk
             if (account?.id == acc.id) remember(type, library)
-            if (System.currentTimeMillis() - savedAt > STALE_AFTER_MS) {
+            val days = Store.autoRefreshDays
+            if (days > 0 && System.currentTimeMillis() - savedAt > days * 24 * 60 * 60 * 1000L) {
                 // Show the saved copy now and quietly fetch a fresh one.
                 scope.launch {
                     runCatching { download(acc, client, type) }

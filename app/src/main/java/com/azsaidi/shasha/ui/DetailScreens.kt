@@ -73,6 +73,11 @@ import com.azsaidi.shasha.data.WatchEntry
 import com.azsaidi.shasha.data.WatchKind
 import com.azsaidi.shasha.data.tidyEpisodeTitle
 import com.azsaidi.shasha.player.Playback
+import com.azsaidi.shasha.player.DownloadActions
+import com.azsaidi.shasha.data.DownloadItem
+import com.azsaidi.shasha.data.Downloads
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.ui.focus.focusProperties
 import kotlinx.coroutines.CancellationException
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -233,6 +238,10 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
                 }
             }
             FavoriteButton(item)
+            MovieDownloadButton(
+                onDownload = { DownloadActions.movie(context, id, title, item?.icon ?: image, info?.extension ?: item?.extension) },
+                item = Downloads.find(WatchKind.MOVIE, id),
+            )
 
             info?.plot?.let { ExpandableText(it) }
             info?.director?.let {
@@ -375,6 +384,19 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                                 )
                             }
                         }
+                        item {
+                            OutlinedButton(
+                                onClick = { DownloadActions.episodes(context, id, title, cover, episodes) },
+                                modifier = Modifier
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    .fillMaxWidth()
+                                    .focusRing(ButtonShape),
+                            ) {
+                                Icon(Icons.Filled.Download, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.download_season, season))
+                            }
+                        }
                         itemsIndexed(episodes) { index, episode ->
                             val watch = Session.historyEntry(WatchKind.EPISODE, episode.id)
                             val play = {
@@ -387,6 +409,8 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                                 watch,
                                 Modifier.remembered(memory, "ep-${episode.id}"),
                                 seriesName = title,
+                                download = Downloads.find(WatchKind.EPISODE, episode.id),
+                                onDownload = { DownloadActions.episodes(context, id, title, cover, listOf(episode)) },
                                 onLongClick = { showEpisodeMenu(context, episode, id, title, cover, play) },
                                 onClick = play,
                             )
@@ -435,9 +459,13 @@ private fun EpisodeRow(
     watch: WatchEntry?,
     modifier: Modifier,
     seriesName: String,
+    download: DownloadItem?,
+    onDownload: () -> Unit,
     onLongClick: () -> Unit,
     onClick: () -> Unit,
 ) {
+    val rowFocus = remember { FocusRequester() }
+    val downloadFocus = remember { FocusRequester() }
     ListItem(
         headlineContent = {
             val name = tidyEpisodeTitle(episode.title, seriesName) ?: stringResource(R.string.episode_n, episode.number)
@@ -486,7 +514,18 @@ private fun EpisodeRow(
                 }
             }
         },
+        trailingContent = {
+            EpisodeDownloadIcon(
+                download,
+                onDownload,
+                Modifier
+                    .focusRequester(downloadFocus)
+                    .focusProperties { start = rowFocus },
+            )
+        },
         modifier = modifier
+            .focusRequester(rowFocus)
+            .focusProperties { end = downloadFocus }
             .focusRing(RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
             .pressable(onClick = onClick, onLongClick = onLongClick),

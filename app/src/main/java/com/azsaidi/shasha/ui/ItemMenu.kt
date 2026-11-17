@@ -50,6 +50,14 @@ import com.azsaidi.shasha.data.WatchEntry
 import com.azsaidi.shasha.data.WatchKind
 import com.azsaidi.shasha.data.tidyEpisodeTitle
 import com.azsaidi.shasha.player.Playback
+import com.azsaidi.shasha.player.DownloadActions
+import com.azsaidi.shasha.player.MultiView
+import com.azsaidi.shasha.player.PlayItem
+import com.azsaidi.shasha.data.DownloadState
+import com.azsaidi.shasha.data.Downloads
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.GridView
 import android.view.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import kotlinx.coroutines.CoroutineScope
@@ -156,6 +164,16 @@ fun showStreamItemMenu(context: Context, item: StreamItem, onOpen: (() -> Unit)?
     }
     actions.add(favouriteAction(context, item))
     when (item.type) {
+        ContentType.LIVE -> actions.add(splitAction(context) { Playback.liveItem(item) })
+        ContentType.MOVIE -> {
+            actions.add(splitAction(context) { Playback.movieItem(item.id, item.name, item.icon, item.extension) })
+            actions.add(downloadAction(context, WatchKind.MOVIE, item.id) {
+                DownloadActions.movie(context, item.id, item.name, item.icon, item.extension)
+            })
+        }
+        ContentType.SERIES -> Unit
+    }
+    when (item.type) {
         ContentType.LIVE -> {
             if (Session.historyEntry(WatchKind.LIVE, item.id) != null) {
                 actions.add(MenuAction(context.getString(R.string.remove_from_recent), Icons.Filled.HistoryToggleOff) {
@@ -184,6 +202,26 @@ fun showStreamItemMenu(context: Context, item: StreamItem, onOpen: (() -> Unit)?
 }
 
 private val menuScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+private fun splitAction(context: Context, build: () -> PlayItem?): MenuAction =
+    MenuAction(context.getString(R.string.add_split), Icons.Filled.GridView) { MultiView.add(context, build()) }
+
+/** "Download", or the matching cancel/delete option when it's already downloaded or downloading. */
+private fun downloadAction(context: Context, kind: WatchKind, streamId: String, start: () -> Unit): MenuAction {
+    val existing = Downloads.find(kind, streamId)
+        ?: return MenuAction(context.getString(R.string.download), Icons.Filled.Download, start)
+    return when (Downloads.status[existing.key]?.state) {
+        DownloadState.DONE ->
+            MenuAction(context.getString(R.string.delete_download), Icons.Filled.Delete) { Downloads.remove(existing) }
+        DownloadState.FAILED ->
+            MenuAction(context.getString(R.string.download), Icons.Filled.Download) {
+                Downloads.remove(existing)
+                start()
+            }
+        else ->
+            MenuAction(context.getString(R.string.cancel_download), Icons.Filled.Close) { Downloads.remove(existing) }
+    }
+}
 
 /** Plays a series straight from its poster: resumes, moves on to the next episode, or starts at S1 E1. */
 private fun playSeries(context: Context, item: StreamItem) {
@@ -220,6 +258,7 @@ private fun watchedAction(context: Context, entry: WatchEntry): MenuAction {
 fun showHistoryMenu(context: Context, entry: WatchEntry, onPlay: () -> Unit) {
     val actions = ArrayList<MenuAction>()
     actions.add(MenuAction(context.getString(R.string.play), Icons.Filled.PlayArrow, onPlay))
+    actions.add(splitAction(context) { Playback.entryItem(entry) })
     when (entry.kind) {
         WatchKind.LIVE -> {
             actions.add(favouriteAction(context, StreamItem(entry.streamId, entry.title, entry.image, null, ContentType.LIVE, null, null)))
@@ -268,6 +307,10 @@ fun showEpisodeMenu(
     )
     val actions = listOf(
         MenuAction(context.getString(R.string.play), Icons.Filled.PlayArrow, onPlay),
+        splitAction(context) { Playback.episodeItem(context, seriesId, seriesName, image, episode) },
+        downloadAction(context, WatchKind.EPISODE, episode.id) {
+            DownloadActions.episodes(context, seriesId, seriesName, image, listOf(episode))
+        },
         watchedAction(context, entry),
     )
     ItemMenu.show(label, actions)

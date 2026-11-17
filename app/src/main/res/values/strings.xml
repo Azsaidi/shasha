@@ -103,7 +103,7 @@
     <string name="remove_account">Remove this account</string>
     <string name="remove_account_title">Remove %1$s?</string>
     <string name="remove_account_body">Its login details, favourites and watch history will be deleted from this device.</string>
-    <string name="version_line">Shasha %1$s · free, no ads</string>
+    <string name="version_line">Shasha %1$s</string>
     <string name="no_account_open">No account open</string>
     <string name="choose_account">Choose account</string>
 
@@ -214,4 +214,41 @@
     <string name="searches_cleared">Search history cleared</string>
     <string name="remove_search">Remove from recent searches</string>
     <string name="history_section">History</string>
+    <string name="tab_downloads">Downloads</string>
+    <string name="download">Download</string>
+    <string name="download_season">Download season %1$d</string>
+    <string name="downloading_pct">Downloading… %1$d%%</string>
+    <string name="downloading">Downloading…</string>
+    <string name="downloaded">Downloaded</string>
+    <string name="download_queued">Waiting to download</string>
+    <string name="download_paused">Paused, waiting for network</string>
+    <string name="download_failed">Download failed</string>
+    <string name="delete_download">Delete download</string>
+    <string name="cancel_download">Cancel download</string>
+    <string name="retry_download">Try downloading again</string>
+    <string name="downloads_empty">No downloads yet</string>
+    <string name="downloads_empty_hint">Download films, episodes or whole seasons from their pages to watch them without internet.</string>
+    <string name="storage_line">Downloads use %1$s · %2$s free on this device</string>
+    <string name="download_started">Downloading “%1$s”</string>
+    <plurals name="episodes_downloading">
+        <item quantity="one">Downloading %1$d episode</item>
+        <item quantity="other">Downloading %1$d episodes</item>
+    </plurals>
+    <string name="download_error">Couldn’t start the download</string>
+    <string name="season_all_downloaded">This season is already downloaded</string>
+    <string name="auto_refresh">Refresh lists automatically</string>
+    <string name="auto_refresh_desc">Downloads fresh channel, film and series lists in the background when they get old.</string>
+    <string name="refresh_off">Off</string>
+    <string name="refresh_3_days">Every 3 days</string>
+    <string name="refresh_week">Every week</string>
+    <string name="split_screen">Split screen</string>
+    <string name="add_split">Add to split screen</string>
+    <string name="split_added">Added to split screen (%1$d of 4)</string>
+    <string name="split_full">Split screen already has 4 streams</string>
+    <string name="split_banner">Split screen: %1$d selected</string>
+    <string name="watch">Watch</string>
+    <string name="split_connections">Your account allows %1$s stream(s) at a time, so some windows may not play.</string>
+    <string name="split_hint">OK: full screen · Hold OK: remove</string>
+    <string name="split_removed">Removed from split screen</string>
+    <string name="split_short">Split</string>
 </resources>
