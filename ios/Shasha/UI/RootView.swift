@@ -14,7 +14,7 @@ struct RootView: View {
                 MainTabs()
                     .fullScreenCover(isPresented: Binding(
                         get: { presenter.multiView },
-                        set: { presenter.multiView = $0 }
+                        set: { if !$0 { presenter.closeMultiView() } }
                     )) {
                         MultiViewScreen()
                     }
@@ -269,24 +269,13 @@ struct LoginView: View {
             if existing != nil {
                 ToolbarItem(placement: .cancellationAction) { Button(L("cancel")) { dismiss() } }
             }
-            // Bar above the keyboard: previous/next field and Done.
-            ToolbarItemGroup(placement: .keyboard) {
-                Button { moveFocus(-1) } label: { Image(systemName: "chevron.up") }
-                    .disabled(focus == .name)
-                    .accessibilityLabel(L("previous"))
-                Button { moveFocus(1) } label: { Image(systemName: "chevron.down") }
-                    .disabled(focus == .password)
-                    .accessibilityLabel(L("next"))
-                Spacer()
-                Button(L("done")) { focus = nil }.bold()
+            // "Done" in the top bar while typing (a bar above the keyboard covered the form).
+            ToolbarItem(placement: .confirmationAction) {
+                if focus != nil {
+                    Button(L("done")) { focus = nil }.bold()
+                }
             }
         }
-    }
-
-    private func moveFocus(_ step: Int) {
-        let order: [Field] = [.name, .server, .username, .password]
-        guard let current = focus, let i = order.firstIndex(of: current) else { return }
-        focus = order[min(max(i + step, 0), order.count - 1)]
     }
 
     private func submit() {
@@ -333,6 +322,8 @@ struct LoginView: View {
                 } else {
                     onDone(account)
                     Session.shared.open(account, knownAuth: auth)
+                    // First sign-in: fetch everything now, with the progress bar showing.
+                    Session.shared.refreshAll()
                 }
             } catch {
                 busy = false

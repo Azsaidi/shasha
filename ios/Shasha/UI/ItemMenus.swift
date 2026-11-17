@@ -78,8 +78,9 @@ enum Actions {
 struct StreamItemMenu: View {
     let item: StreamItem
     var list: [StreamItem] = []
-    @ObservedObject private var session = Session.shared
-    @ObservedObject private var downloads = Downloads.shared
+    // Not observed: menus are rebuilt with their screen, and observing here would redraw every poster.
+    private var session: Session { .shared }
+    private var downloads: Downloads { .shared }
 
     var body: some View {
         Button { Actions.open(item, list: list) } label: { Label(L("play"), systemImage: "play.fill") }
@@ -125,7 +126,8 @@ struct StreamItemMenu: View {
 /// Options for a Continue watching card or a recently watched channel.
 struct HistoryMenu: View {
     let entry: WatchEntry
-    @ObservedObject private var session = Session.shared
+    // Not observed: menus are rebuilt with their screen, and observing here would redraw every poster.
+    private var session: Session { .shared }
 
     var body: some View {
         Button { Actions.play(entry) } label: { Label(L("play"), systemImage: "play.fill") }
@@ -170,7 +172,7 @@ struct DownloadMenuButton: View {
     let kind: WatchKind
     let streamId: String
     let start: () -> Void
-    @ObservedObject private var downloads = Downloads.shared
+    private var downloads: Downloads { .shared }
 
     var body: some View {
         if let existing = downloads.find(kind, streamId) {
@@ -199,7 +201,8 @@ struct DownloadMenuButton: View {
 
 struct WatchedButton: View {
     let entry: WatchEntry
-    @ObservedObject private var session = Session.shared
+    // Not observed: menus are rebuilt with their screen, and observing here would redraw every poster.
+    private var session: Session { .shared }
 
     var body: some View {
         if session.historyEntry(entry.kind, entry.streamId)?.finished == true {

@@ -71,25 +71,20 @@ struct MovieDetailView: View {
                             Playback.movie(item.id, title: item.name, image: item.icon, ext: ext)
                         } label: {
                             Label(L("resume_from", formatTime(entry.position)), systemImage: "play.fill")
-                                .frame(maxWidth: .infinity)
+                                .pill(prominent: true)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
                         ProgressBar(value: entry.progress)
                         Button {
                             Playback.movie(item.id, title: item.name, image: item.icon, ext: ext, fromStart: true)
                         } label: {
-                            Label(L("start_over"), systemImage: "backward.end.fill").frame(maxWidth: .infinity)
+                            Label(L("start_over"), systemImage: "backward.end.fill").pill()
                         }
-                        .buttonStyle(.bordered)
                     } else {
                         Button {
                             Playback.movie(item.id, title: item.name, image: item.icon, ext: ext, fromStart: true)
                         } label: {
-                            Label(L("play"), systemImage: "play.fill").frame(maxWidth: .infinity)
+                            Label(L("play"), systemImage: "play.fill").pill(prominent: true)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
                     }
 
                     HStack(spacing: 10) {
@@ -100,10 +95,9 @@ struct MovieDetailView: View {
                             Actions.toggleFavourite(item)
                         } label: {
                             Image(systemName: session.isFavourite(item) ? "star.fill" : "star")
-                                .foregroundStyle(session.isFavourite(item) ? .yellow : .primary)
-                                .frame(width: 24)
+                                .foregroundStyle(session.isFavourite(item) ? Color.yellow : Color.white)
+                                .pill(square: true)
                         }
-                        .buttonStyle(.bordered)
                         .accessibilityLabel(session.isFavourite(item) ? L("remove_favourite") : L("add_favourite"))
                         Menu {
                             Button { MultiView.shared.add(Playback.movieItem(item.id, item.name, item.icon, ext)) } label: {
@@ -116,10 +110,11 @@ struct MovieDetailView: View {
                                 }
                             }
                         } label: {
-                            Image(systemName: "ellipsis").frame(width: 24, height: 20)
+                            Image(systemName: "ellipsis").pill(square: true)
                         }
-                        .buttonStyle(.bordered)
+                        .menuStyle(.button)
                     }
+                    .buttonStyle(PressableStyle())
 
                     if entry?.finished == true {
                         Label(L("watched"), systemImage: "checkmark.circle.fill")
@@ -141,6 +136,7 @@ struct MovieDetailView: View {
                     }
                 }
                 .padding(.horizontal, 16)
+                .buttonStyle(PressableStyle())
             }
             .padding(.bottom, 24)
         }
@@ -183,7 +179,9 @@ struct DownloadButton: View {
                     Text(L("downloaded"))
                 case .running:
                     ProgressView(value: status?.fraction ?? 0).frame(width: 40).tint(Theme.accent)
-                    Text(status?.fraction.map { "\(Int($0 * 100))%" } ?? L("downloading"))
+                    Text([status?.fraction.map { "\(Int($0 * 100))%" } ?? L("downloading"),
+                          status?.eta.map { formatDuration($0) }].compactMap { $0 }.joined(separator: " · "))
+                        .monospacedDigit()
                 case .queued, .paused:
                     Image(systemName: "clock")
                     Text(L("download_queued")).lineLimit(1)
@@ -195,7 +193,7 @@ struct DownloadButton: View {
                     Text(L("download"))
                 }
             }
-            .frame(maxWidth: .infinity)
+            .pill()
         } primaryAction: {
             if existing == nil { start() } else if status?.state == .failed, let existing {
                 downloads.retry(existing)
@@ -203,7 +201,8 @@ struct DownloadButton: View {
                 AppNav.shared.goToDownloads()
             }
         }
-        .buttonStyle(.bordered)
+        .menuStyle(.button)
+        .buttonStyle(PressableStyle())
     }
 }
 
@@ -295,10 +294,9 @@ struct SeriesDetailView: View {
                 Playback.episodes(seriesId: item.id, seriesName: name, cover: cover,
                                   episodes: info.seasons[action.season] ?? [], index: action.index, fromStart: action.fromStart)
             } label: {
-                Label(action.label, systemImage: "play.fill").frame(maxWidth: .infinity)
+                Label(action.label, systemImage: "play.fill").pill(prominent: true)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .buttonStyle(PressableStyle())
         }
 
         if let plot = info.plot {
@@ -332,9 +330,11 @@ struct SeriesDetailView: View {
                     DownloadActions.episodes(seriesId: item.id, seriesName: name, cover: cover, episodes)
                 } label: {
                     Label(L("download_season", current), systemImage: "arrow.down.circle")
-                        .font(.subheadline)
+                        .fixedSize()
+                        .pill(compact: true)
+                        .fixedSize()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(PressableStyle())
             }
             .padding(.top, 8)
 

@@ -51,14 +51,15 @@ func ordered(_ items: [StreamItem], _ order: SortOrder, favourites: Set<String>)
 struct BrowserView: View {
     let type: ContentType
     @ObservedObject private var session = Session.shared
-    @ObservedObject private var downloads = Downloads.shared
     @State private var library: Library?
     @State private var error: String?
     @State private var query = ""
     @State private var categoryId: String?
     @State private var sort: SortOrder
     @State private var shown: [StreamItem] = []
+    @State private var categories: [Category] = []
     @State private var counts: [String: Int] = [:]
+    @State private var total = 0
     @State private var filtering = false
     @State private var showCategories = false
 
@@ -79,10 +80,10 @@ struct BrowserView: View {
 
     private var filterKey: FilterKey {
         FilterKey(version: session.cacheVersion, query: query, category: categoryId, sort: sort,
-                  hideAdult: session.hideAdult, favourites: session.favourites.count, loaded: library != nil)
+                  hideAdult: session.hideAdult,
+                  favourites: sort == .favourites ? session.favourites.count : 0,
+                  loaded: library != nil)
     }
-
-    private var categories: [Category] { library.map { session.visible($0).categories } ?? [] }
 
     var body: some View {
         Group {
@@ -95,17 +96,7 @@ struct BrowserView: View {
                                action: (L("try_again"), { Task { await load() } }))
                 }
             } else {
-                VStack(spacing: 14) {
-                    Banners()
-                    Spacer()
-                    ProgressView().controlSize(.large)
-                    Text(L("loading_x", L(type.nounKey))).font(.headline)
-                    if let bytes = session.downloadBytes[type], bytes > 0 {
-                        Text(L("downloaded_mb", megabytes(bytes))).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
+                LoadingList(type: type, progress: session.progress)
             }
         }
         .screenBackground()
@@ -148,7 +139,7 @@ struct BrowserView: View {
         .task(id: session.cacheVersion) { await load() }
         .task(id: filterKey) { await applyFilter() }
         .sheet(isPresented: $showCategories) {
-            CategoryPicker(categories: categories, counts: counts, total: library.map { session.visible($0).items.count } ?? 0,
+            CategoryPicker(categories: categories, counts: counts, total: total,
                            noun: L(type.nounKey), selected: $categoryId)
         }
     }
@@ -163,15 +154,22 @@ struct BrowserView: View {
         }
     }
 
+    /// Filtering and sorting run off the main thread so typing and scrolling stay smooth.
     private func applyFilter() async {
         guard let library else { return }
+        if !query.isEmpty {
+            // Wait for typing to pause.
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+        }
         filtering = true
-        let visible = session.visible(library)
+        let hide = session.hideAdult
         let q = query.trimmingCharacters(in: .whitespaces)
         let cat = categoryId
         let order = sort
-        let favs = Set(session.favourites.map(\.uid))
-        let result = await Task.detached(priority: .userInitiated) { () -> ([StreamItem], [String: Int]) in
+        let favs = session.favouriteUids
+        let result = await Task.detached(priority: .userInitiated) { () -> ([StreamItem], [Category], [String: Int], Int) in
+            let visible = Session.filterAdult(library, hide: hide)
             var counts: [String: Int] = [:]
             for item in visible.items { counts[item.categoryId ?? "", default: 0] += 1 }
             var items = visible.items
@@ -179,18 +177,20 @@ struct BrowserView: View {
             if !q.isEmpty {
                 items = items.filter { $0.name.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
             }
-            return (ordered(items, order, favourites: favs), counts)
+            return (ordered(items, order, favourites: favs), visible.categories, counts, visible.items.count)
         }.value
         guard !Task.isCancelled else { return }
         shown = result.0
-        counts = result.1
+        categories = result.1
+        counts = result.2
+        total = result.3
         filtering = false
     }
 
     @ViewBuilder
     private func content(_ library: Library) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12, pinnedViews: []) {
+            VStack(alignment: .leading, spacing: 12) {
                 Banners()
                 categoryChips
                 if shown.isEmpty && !filtering {
@@ -200,21 +200,24 @@ struct BrowserView: View {
                         EmptyState(icon: "magnifyingglass", title: L("nothing_matches"), message: L("try_different"))
                     }
                 } else if type == .live {
-                    ForEach(Array(shown.enumerated()), id: \.element.id) { i, item in
-                        ChannelRow(item: item) {
-                            if !query.isEmpty { session.rememberSearch(query) }
-                            Playback.channels(shown, index: i)
+                    LazyVStack(spacing: 8) {
+                        ForEach(shown) { item in
+                            ChannelRow(item: item, favourite: session.isFavourite(item)) {
+                                if !query.isEmpty { session.rememberSearch(query) }
+                                Playback.channels(shown, index: shown.firstIndex(of: item) ?? 0)
+                            }
+                            .contextMenu { StreamItemMenu(item: item, list: shown) }
                         }
-                        .contextMenu { StreamItemMenu(item: item, list: shown) }
-                        .padding(.horizontal, 16)
                     }
+                    .padding(.horizontal, 16)
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 12, alignment: .top)], spacing: 16) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 12, alignment: .top)],
+                              alignment: .leading, spacing: 16) {
                         ForEach(shown) { item in
                             NavigationLink(value: item) {
                                 PosterCard(title: item.name, image: item.icon, subtitle: item.year.map(String.init),
                                            progress: progress(item), favourite: session.isFavourite(item),
-                                           downloaded: item.type == .movie && downloads.localURL(.movie, item.id) != nil)
+                                           downloaded: item.type == .movie && Downloads.shared.isDownloaded(.movie, item.id))
                             }
                             .buttonStyle(.plain)
                             .simultaneousGesture(TapGesture().onEnded {
@@ -240,7 +243,7 @@ struct BrowserView: View {
                     Label(L("categories"), systemImage: "line.3.horizontal.decrease.circle")
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
+                        .frame(height: 36)
                         .background(Theme.cardHigh, in: Capsule())
                 }
                 chip(L("all_x", L(type.nounKey)), selected: categoryId == nil) { categoryId = nil }
@@ -250,6 +253,7 @@ struct BrowserView: View {
             }
             .padding(.horizontal, 16)
         }
+        .frame(height: 40)
         .buttonStyle(.plain)
     }
 
@@ -259,7 +263,7 @@ struct BrowserView: View {
                 .font(.subheadline)
                 .lineLimit(1)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .frame(height: 36)
                 .foregroundStyle(selected ? .black : .white)
                 .background(selected ? Theme.accent : Theme.card, in: Capsule())
         }
@@ -271,19 +275,39 @@ struct BrowserView: View {
     }
 }
 
+/// Shown while a list downloads for the first time.
+private struct LoadingList: View {
+    let type: ContentType
+    @ObservedObject var progress: ListProgress
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Banners()
+            Spacer()
+            ProgressView().controlSize(.large)
+            Text(L("loading_x", L(type.nounKey))).font(.headline)
+            if let bytes = progress.bytes[type], bytes > 0 {
+                Text(L("downloaded_mb", megabytes(bytes))).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
 struct ChannelRow: View {
     let item: StreamItem
+    let favourite: Bool
     let onPlay: () -> Void
-    @ObservedObject private var session = Session.shared
 
     var body: some View {
         HStack(spacing: 12) {
             Button(action: onPlay) {
                 HStack(spacing: 12) {
-                    CachedImage(url: item.icon, contentMode: .fit, placeholder: "tv")
-                        .padding(6)
+                    Theme.cardHigh
                         .frame(width: 72, height: 46)
-                        .background(Theme.cardHigh, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay { CachedImage(url: item.icon, contentMode: .fit, placeholder: "tv").padding(6) }
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     Text(item.name)
                         .font(.body.weight(.medium))
                         .lineLimit(2)
@@ -296,12 +320,12 @@ struct ChannelRow: View {
             Button {
                 Actions.toggleFavourite(item)
             } label: {
-                Image(systemName: session.isFavourite(item) ? "star.fill" : "star")
-                    .foregroundStyle(session.isFavourite(item) ? .yellow : .secondary)
+                Image(systemName: favourite ? "star.fill" : "star")
+                    .foregroundStyle(favourite ? .yellow : .secondary)
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(session.isFavourite(item) ? L("remove_favourite") : L("add_favourite"))
+            .accessibilityLabel(favourite ? L("remove_favourite") : L("add_favourite"))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

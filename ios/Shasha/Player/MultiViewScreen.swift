@@ -71,6 +71,7 @@ final class MultiViewModel: ObservableObject {
 struct MultiViewScreen: View {
     @ObservedObject private var multi = MultiView.shared
     @ObservedObject private var session = Session.shared
+    @ObservedObject private var presenter = PlayerPresenter.shared
     @StateObject private var model = MultiViewModel()
     @State private var picking = false
 
@@ -89,6 +90,9 @@ struct MultiViewScreen: View {
                         .transition(.opacity)
                 }
                 ToastOverlay()
+                if presenter.multiHiding {
+                    Color.black.ignoresSafeArea()
+                }
             }
         }
         .ignoresSafeArea()
@@ -96,17 +100,19 @@ struct MultiViewScreen: View {
         .persistentSystemOverlays(.hidden)
         .preferredColorScheme(.dark)
         .onAppear {
+            Orientation.set(Orientation.player)
             model.sync(multi.items)
             model.poke()
-            Orientation.set(Orientation.player)
         }
         .onDisappear {
             model.stopAll()
-            Orientation.set(Orientation.appDefault)
+        }
+        .onChange(of: presenter.multiHiding) { hiding in
+            if hiding { model.stopAll() }
         }
         .onChange(of: multi.items) { items in
             if items.isEmpty {
-                PlayerPresenter.shared.multiView = false
+                if presenter.multiView { presenter.closeMultiView() }
             } else {
                 model.sync(items)
             }
@@ -163,8 +169,8 @@ struct MultiViewScreen: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Button {
+                    presenter.closeMultiView()
                     multi.clear()
-                    PlayerPresenter.shared.multiView = false
                 } label: {
                     Label(L("split_exit"), systemImage: "xmark")
                 }

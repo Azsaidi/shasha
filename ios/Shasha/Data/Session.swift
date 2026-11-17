@@ -12,6 +12,12 @@ struct RefreshState: Equatable {
     var error: String? = nil
 }
 
+/// Bytes downloaded so far for each list being fetched. Kept apart from Session so the frequent
+/// updates only redraw the progress bar, not every screen.
+final class ListProgress: ObservableObject {
+    @Published var bytes: [ContentType: Int64] = [:]
+}
+
 /// The account that's open, its channel/film/series lists (memory + disk), favourites and watch history.
 @MainActor
 final class Session: ObservableObject {
@@ -24,12 +30,18 @@ final class Session: ObservableObject {
     /// Bumped whenever lists change, so screens reload them.
     @Published private(set) var cacheVersion = 0
     @Published private(set) var hideAdult = Store.shared.hideAdult
-    @Published private(set) var favourites: [StreamItem] = []
-    @Published private(set) var history: [WatchEntry] = []
+    @Published private(set) var favourites: [StreamItem] = [] {
+        didSet { favouriteIds = Set(favourites.map(\.uid)) }
+    }
+    @Published private(set) var history: [WatchEntry] = [] {
+        didSet { historyIndex = Dictionary(history.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a }) }
+    }
+    /// Fast lookups for the many posters on screen.
+    private var favouriteIds = Set<String>()
+    private var historyIndex: [String: WatchEntry] = [:]
     @Published private(set) var searches: [String] = UserDefaults.standard.stringArray(forKey: "searches") ?? []
 
-    /// Bytes downloaded so far for each list being fetched.
-    @Published var downloadBytes: [ContentType: Int64] = [:]
+    let progress = ListProgress()
     @Published private(set) var refresh: RefreshState?
 
     private var libraries: [ContentType: Library] = [:]
@@ -87,7 +99,7 @@ final class Session: ObservableObject {
         refresh = nil
         libraries = [:]
         loading = [:]
-        downloadBytes = [:]
+        progress.bytes = [:]
         cacheVersion += 1
     }
 
@@ -139,10 +151,10 @@ final class Session: ObservableObject {
 
     private func download(_ acc: Account, _ type: ContentType) async throws -> Library {
         let client = XtreamAPI(account: acc)
-        downloadBytes[type] = 0
+        progress.bytes[type] = 0
         async let cats = client.categories(type)
         async let items = client.streams(type) { bytes in
-            Task { @MainActor in Session.shared.downloadBytes[type] = bytes }
+            Task { @MainActor in Session.shared.progress.bytes[type] = bytes }
         }
         let lib = Library(categories: try await cats, items: try await items)
         if account?.id == acc.id { libraries[type] = lib }
@@ -243,8 +255,11 @@ final class Session: ObservableObject {
     }
 
     /// The list with adult categories removed when that setting is on.
-    func visible(_ lib: Library) -> Library {
-        guard hideAdult else { return lib }
+    func visible(_ lib: Library) -> Library { Session.filterAdult(lib, hide: hideAdult) }
+
+    /// Can run off the main thread (it checks every title).
+    nonisolated static func filterAdult(_ lib: Library, hide: Bool) -> Library {
+        guard hide else { return lib }
         let hidden = Set(lib.categories.filter { Session.isAdult($0.name) }.map(\.id))
         return Library(
             categories: lib.categories.filter { !hidden.contains($0.id) },
@@ -254,9 +269,9 @@ final class Session: ObservableObject {
 
     // MARK: - Favourites
 
-    func isFavourite(_ item: StreamItem) -> Bool {
-        favourites.contains { $0.type == item.type && $0.id == item.id }
-    }
+    func isFavourite(_ item: StreamItem) -> Bool { favouriteIds.contains(item.uid) }
+
+    var favouriteUids: Set<String> { favouriteIds }
 
     func toggleFavourite(_ item: StreamItem) {
         if let i = favourites.firstIndex(where: { $0.type == item.type && $0.id == item.id }) {
@@ -270,8 +285,7 @@ final class Session: ObservableObject {
     // MARK: - Watch history
 
     func historyEntry(_ kind: WatchKind, _ streamId: String) -> WatchEntry? {
-        let key = WatchEntry.key(kind, streamId)
-        return history.first { $0.key == key }
+        historyIndex[WatchEntry.key(kind, streamId)]
     }
 
     func record(_ entry: WatchEntry, accountId: String) {

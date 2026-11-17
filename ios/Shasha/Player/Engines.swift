@@ -43,6 +43,8 @@ protocol PlaybackEngine: AnyObject {
     var muted: Bool { get set }
     var gravity: VideoGravity { get set }
     var supportsPip: Bool { get }
+    /// True once picture-in-picture can actually start (the video is showing).
+    var canStartPip: Bool { get }
     var pipActive: Bool { get }
     var onPipChange: ((Bool) -> Void)? { get set }
 
@@ -77,9 +79,9 @@ enum Engines {
         return !vlcAvailable
     }
 
-    static func make(for url: URL) -> PlaybackEngine {
+    static func make(for url: URL, preferVLC: Bool = false) -> PlaybackEngine {
         #if canImport(MobileVLCKit)
-        if !usesApple(url) { return VLCEngine() }
+        if preferVLC || !usesApple(url) { return VLCEngine() }
         #endif
         return AVEngine()
     }
@@ -112,11 +114,7 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
         layerView.playerLayer.player = player
         layerView.playerLayer.videoGravity = .resizeAspect
         player.allowsExternalPlayback = true
-        if AVPictureInPictureController.isPictureInPictureSupported() {
-            pip = AVPictureInPictureController(playerLayer: layerView.playerLayer)
-            pip?.delegate = self
-            pip?.canStartPictureInPictureAutomaticallyFromInline = Store.shared.autoPip
-        }
+        setUpPip()
         statusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { self?.reportStatus() }
         }
@@ -130,6 +128,21 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
         guard reported != state else { return }
         reported = state
         onState?(state)
+    }
+
+    /// Picture-in-picture needs the layer to be showing a player; (re)create it once the video is ready.
+    private func setUpPip() {
+        guard pip == nil, AVPictureInPictureController.isPictureInPictureSupported() else { return }
+        let controller = AVPictureInPictureController(contentSource: .init(playerLayer: layerView.playerLayer))
+        controller.delegate = self
+        controller.canStartPictureInPictureAutomaticallyFromInline = Store.shared.autoPip
+        pip = controller
+    }
+
+    /// False when sound plays but the picture can't be decoded (e.g. 4K HEVC inside a TS stream).
+    var showsPicture: Bool {
+        let size = player.currentItem?.presentationSize ?? .zero
+        return size.width > 0 && size.height > 0
     }
 
     private func reportStatus() {
@@ -156,6 +169,7 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
                 if item.status == .failed {
                     self.report(.failed(AVEngine.describe(item.error)))
                 } else {
+                    if item.status == .readyToPlay { self.setUpPip() }
                     self.reportStatus()
                 }
             }
@@ -252,6 +266,7 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
     // Picture-in-picture
 
     var supportsPip: Bool { pip != nil }
+    var canStartPip: Bool { (pip?.isPictureInPicturePossible ?? false) && showsPicture }
     var pipActive: Bool { pip?.isPictureInPictureActive ?? false }
 
     func startPip() { pip?.startPictureInPicture() }
@@ -468,6 +483,7 @@ final class VLCEngine: NSObject, PlaybackEngine {
     }
 
     var supportsPip: Bool { false }
+    var canStartPip: Bool { false }
     var pipActive: Bool { false }
     func startPip() {}
     func stopPip() {}

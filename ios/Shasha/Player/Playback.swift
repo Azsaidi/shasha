@@ -38,33 +38,86 @@ final class Toast: ObservableObject {
 }
 
 /// Opens the full-screen player and split screen from anywhere in the app.
+///
+/// On iPhone the player is landscape and the app portrait. To avoid the app flashing sideways,
+/// the player opens without a slide animation (on a black screen that then turns), and when it
+/// closes the black screen turns back first, then disappears.
 @MainActor
 final class PlayerPresenter: ObservableObject {
     static let shared = PlayerPresenter()
-    @Published var player: PlayerModel?
-    @Published var multiView = false
+    @Published private(set) var player: PlayerModel?
+    @Published private(set) var multiView = false
+    @Published private(set) var multiHiding = false
     /// The last list played, offered as "Same list" when adding to split screen.
     private(set) var lastQueue: [PlayItem] = []
+
+    private func withoutAnimation(_ change: () -> Void) {
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t, change)
+    }
+
+    private func after(_ seconds: Double, _ work: @escaping @MainActor () -> Void) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            work()
+        }
+    }
+
+    /// Turns the screen back to the app's orientation, then runs `then`.
+    private func rotateBack(_ then: @escaping @MainActor () -> Void) {
+        if AppDelegate.orientationMask != Orientation.appDefault {
+            Orientation.set(Orientation.appDefault)
+            after(0.45, then)
+        } else {
+            then()
+        }
+    }
 
     func present(_ items: [PlayItem], index: Int, fromStart: Bool = false) {
         guard !items.isEmpty else { return }
         lastQueue = items
         let model = PlayerModel(items: items, index: min(max(index, 0), items.count - 1), fromStart: fromStart)
         if multiView {
-            multiView = false
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 450_000_000)
-                self.player = model
-            }
+            // From split screen: stay sideways and swap screens.
+            withoutAnimation { multiView = false }
+            after(0.35) { self.withoutAnimation { self.player = model } }
+        } else if let old = player {
+            old.close()
+            withoutAnimation { player = nil }
+            after(0.35) { self.withoutAnimation { self.player = model } }
         } else {
-            player?.close()
-            player = model
+            withoutAnimation { player = model }
         }
     }
 
     func dismissPlayer() {
-        player?.close()
-        player = nil
+        guard let model = player, !model.hiding else { return }
+        model.close()
+        model.hiding = true
+        rotateBack {
+            self.withoutAnimation { self.player = nil }
+        }
+    }
+
+    func openMultiView() {
+        if let model = player {
+            // From the player: stay sideways and swap screens.
+            model.close()
+            withoutAnimation { player = nil }
+            after(0.35) { self.withoutAnimation { self.multiView = true } }
+        } else {
+            withoutAnimation { multiView = true }
+        }
+    }
+
+    func closeMultiView() {
+        guard multiView, !multiHiding else { return }
+        multiHiding = true
+        rotateBack {
+            self.withoutAnimation { self.multiView = false }
+            self.multiHiding = false
+        }
     }
 }
 
@@ -97,17 +150,7 @@ final class MultiView: ObservableObject {
 
     func open() {
         guard !items.isEmpty else { return }
-        let presenter = PlayerPresenter.shared
-        if presenter.player != nil {
-            presenter.dismissPlayer()
-            // Let the player finish closing before split screen opens.
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 450_000_000)
-                presenter.multiView = true
-            }
-        } else {
-            presenter.multiView = true
-        }
+        PlayerPresenter.shared.openMultiView()
     }
 }
 

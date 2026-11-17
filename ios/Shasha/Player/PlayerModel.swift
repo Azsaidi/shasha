@@ -27,6 +27,10 @@ final class PlayerModel: ObservableObject, Identifiable {
     @Published var scrubbing: Double?
     /// Bumped when the engine changes so the video view is replaced.
     @Published private(set) var engineVersion = 0
+    /// What the person asked for (play or pause); drives the play/pause button.
+    @Published private(set) var wantsPlay = true
+    /// Black screen while the player rotates away before closing.
+    @Published var hiding = false
 
     private let fromStart: Bool
     private var started = false
@@ -42,6 +46,8 @@ final class PlayerModel: ObservableObject, Identifiable {
     private var trackedIndex = -1
     private var lastPosition: Double = 0
     private var lastDuration: Double = 0
+    private var playingSince: Date?
+    private var noPictureRetried = Set<Int>()
 
     init(items: [PlayItem], index: Int, fromStart: Bool) {
         self.items = items
@@ -93,13 +99,15 @@ final class PlayerModel: ObservableObject, Identifiable {
         return !entry.finished && entry.position > 10 ? entry.position : 0
     }
 
-    private func load(_ i: Int, seekToSaved: Bool = true, url override: URL? = nil) {
+    private func load(_ i: Int, seekToSaved: Bool = true, url override: URL? = nil, start: Double? = nil, preferVLC: Bool = false) {
         guard items.indices.contains(i) else { return }
         let item = items[i]
         let url = override ?? item.url
-        let startAt = seekToSaved ? savedPosition(item) : 0
+        let startAt = start ?? (seekToSaved ? savedPosition(item) : 0)
         engine?.stop()
-        let e = Engines.make(for: url)
+        playingSince = nil
+        wantsPlay = true
+        let e = Engines.make(for: url, preferVLC: preferVLC)
         e.gravity = gravity
         e.onState = { [weak self] s in self?.stateChanged(s) }
         e.onPipChange = { [weak self] active in self?.pipActive = active }
@@ -125,6 +133,11 @@ final class PlayerModel: ObservableObject, Identifiable {
 
     private func stateChanged(_ s: EngineState) {
         state = s
+        if s == .playing {
+            if playingSince == nil { playingSince = Date() }
+        } else {
+            playingSince = nil
+        }
         switch s {
         case .ended:
             finishedCurrent()
@@ -157,14 +170,42 @@ final class PlayerModel: ObservableObject, Identifiable {
 
     func retry() {
         retried.remove(index)
+        noPictureRetried.remove(index)
         load(index, seekToSaved: true)
+    }
+
+    /// Apple's player sometimes plays the sound but can't show the picture (4K HEVC inside TS
+    /// segments, unusual codecs). Hand the stream to VLC instead.
+    private func checkPicture() {
+        guard Engines.vlcAvailable, let since = playingSince, Date().timeIntervalSince(since) > 4,
+              let av = engine as? AVEngine, !av.showsPicture, !noPictureRetried.contains(index),
+              let item = current else { return }
+        noPictureRetried.insert(index)
+        var url = item.url
+        if item.isLive, url.absoluteString.hasSuffix(".m3u8"),
+           let ts = URL(string: String(url.absoluteString.dropLast(5)) + ".ts") {
+            url = ts
+            items[index].url = ts
+        }
+        let at = item.isLive ? 0 : av.position
+        load(index, url: url, start: at, preferVLC: true)
     }
 
     // MARK: Controls
 
     func togglePlay() {
         guard let engine else { return }
-        if isPlaying { engine.pause() } else { engine.play() }
+        if wantsPlay {
+            engine.pause()
+            wantsPlay = false
+        } else {
+            if errorMessage != nil {
+                retry()
+                return
+            }
+            engine.play()
+            wantsPlay = true
+        }
         showControls()
     }
 
@@ -220,8 +261,14 @@ final class PlayerModel: ObservableObject, Identifiable {
     }
 
     func togglePip() {
-        guard let engine, engine.supportsPip else { return }
-        if engine.pipActive { engine.stopPip() } else { engine.startPip() }
+        guard let engine else { return }
+        if engine.pipActive {
+            engine.stopPip()
+        } else if engine.canStartPip {
+            engine.startPip()
+        } else {
+            Toast.shared.show(L("pip_unavailable"))
+        }
     }
 
     func showControls(autoHide: Bool = true) {
@@ -230,7 +277,7 @@ final class PlayerModel: ObservableObject, Identifiable {
         guard autoHide else { return }
         hideTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            guard let self, !Task.isCancelled, self.isPlaying, self.scrubbing == nil else { return }
+            guard let self, !Task.isCancelled, self.wantsPlay, self.errorMessage == nil, self.scrubbing == nil else { return }
             withAnimation(.easeIn(duration: 0.3)) { self.controlsVisible = false }
         }
     }
@@ -311,6 +358,7 @@ final class PlayerModel: ObservableObject, Identifiable {
             load(next, seekToSaved: false)
             announceEpisode()
         } else {
+            wantsPlay = false
             showControls(autoHide: false)
         }
     }
@@ -331,10 +379,12 @@ final class PlayerModel: ObservableObject, Identifiable {
             saveCurrent()
         }
         updateUpNext()
+        checkPicture()
         if let end = sleepEnd, Date() >= end {
             sleepEnd = nil
             sleepMinutes = 0
             engine.pause()
+            wantsPlay = false
             Toast.shared.show(L("sleep_done"))
             showControls(autoHide: false)
         }

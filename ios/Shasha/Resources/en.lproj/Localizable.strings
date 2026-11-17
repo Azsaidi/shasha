@@ -256,3 +256,4 @@
 "playing_in_pip" = "Playing in picture-in-picture";
 "all_categories" = "All categories";
 "see_all" = "See all";
+"pip_unavailable" = "Picture-in-picture isn’t available until the video is showing.";

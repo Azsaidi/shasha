@@ -35,6 +35,14 @@ struct DownloadStatus: Equatable {
     var total: Int64
     /// For failures: an HTTP status code or one of the reason values. For pauses: why it's paused.
     var reason = 0
+    /// Bytes per second while running (smoothed).
+    var speed: Double = 0
+
+    /// Seconds left, when the size and speed are known.
+    var eta: Double? {
+        guard state == .running, total > 0, speed > 1 else { return nil }
+        return Double(max(total - bytes, 0)) / speed
+    }
 
     var fraction: Double? { total > 0 ? min(max(Double(bytes) / Double(total), 0), 1) : nil }
     var active: Bool { state == .queued || state == .running || state == .paused }
@@ -74,7 +82,10 @@ final class Downloads: NSObject, ObservableObject {
     private var stopping: Stop?
     private var attempts: [String: Int] = [:]
     private var outcome: [String: Outcome] = [:]
-    private var lastPublish: [String: Date] = [:]
+    private var lastPublish: [String: (time: Date, bytes: Int64)] = [:]
+    private var speeds: [String: Double] = [:]
+    /// Downloads started from saved resume data (if that fails, start over instead).
+    private var resumed = Set<String>()
 
     private enum Stop { case pause, cancel }
     private enum Outcome { case done(Int64), retry(Int), fail(Int) }
@@ -159,6 +170,11 @@ final class Downloads: NSObject, ObservableObject {
 
     func findByKey(_ key: String) -> DownloadItem? { items.first { $0.key == key } }
 
+    /// Cheap check for posters and lists.
+    func isDownloaded(_ kind: WatchKind, _ streamId: String) -> Bool {
+        status[WatchEntry.key(kind, streamId)]?.state == .done
+    }
+
     /// A file address for a finished download, so playback works without internet.
     func localURL(_ kind: WatchKind, _ streamId: String) -> URL? {
         guard let item = find(kind, streamId), status[item.key]?.state == .done else { return nil }
@@ -175,7 +191,12 @@ final class Downloads: NSObject, ObservableObject {
         if active && onePerAccount {
             pauseCurrent()
         } else if !active {
-            kick()
+            // Give the provider a few seconds to notice the stream has stopped, or it may refuse
+            // the download for using a second connection.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                guard let self, !self.streamingNow else { return }
+                self.kick()
+            }
         }
     }
 
@@ -271,7 +292,9 @@ final class Downloads: NSObject, ObservableObject {
         if let data = try? Data(contentsOf: resume) {
             try? FileManager.default.removeItem(at: resume)
             task = session.downloadTask(withResumeData: data)
+            resumed.insert(item.key)
         } else {
+            resumed.remove(item.key)
             guard let url = URL(string: item.url) else {
                 fail(item.key, Downloads.reasonNeedsRedownload)
                 return
@@ -343,9 +366,16 @@ extension Downloads: URLSessionDownloadDelegate {
         guard let key = downloadTask.taskDescription, downloadTask == currentTask else { return }
         let total = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : (findByKey(key)?.total ?? 0)
         let now = Date()
-        if let last = lastPublish[key], now.timeIntervalSince(last) < 0.5 { return }
-        lastPublish[key] = now
-        status[key] = DownloadStatus(state: .running, bytes: totalBytesWritten, total: total)
+        var speed = speeds[key] ?? 0
+        if let last = lastPublish[key] {
+            let dt = now.timeIntervalSince(last.time)
+            if dt < 0.5 { return }
+            let instant = Double(max(totalBytesWritten - last.bytes, 0)) / dt
+            speed = speed > 0 ? speed * 0.8 + instant * 0.2 : instant
+            speeds[key] = speed
+        }
+        lastPublish[key] = (now, totalBytesWritten)
+        status[key] = DownloadStatus(state: .running, bytes: totalBytesWritten, total: total, speed: speed)
         if total > 0, findByKey(key)?.total != total { replace(key) { $0.total = total } }
         attempts[key] = 0
     }
@@ -355,7 +385,9 @@ extension Downloads: URLSessionDownloadDelegate {
         let code = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 200
         guard (200..<300).contains(code) else {
             switch code {
-            case 401, 403, 404, 410: outcome[key] = .fail(code)
+            // 403/429/509 usually mean "connection limit reached" (e.g. a stream that only just
+            // stopped), so those are retried with a growing wait.
+            case 401, 404, 410: outcome[key] = .fail(code)
             default: outcome[key] = .retry(code)
             }
             return
@@ -378,6 +410,9 @@ extension Downloads: URLSessionDownloadDelegate {
             currentTask = nil
             currentKey = nil
         }
+        lastPublish[key] = nil
+        speeds[key] = nil
+        let fromResume = resumed.remove(key) != nil
         defer { kick() }
 
         if let error {
@@ -391,6 +426,10 @@ extension Downloads: URLSessionDownloadDelegate {
                 return
             }
             guard findByKey(key) != nil else { return }
+            // The saved resume point didn't work: start the file again rather than failing.
+            if fromResume && ns.userInfo[NSURLSessionDownloadTaskResumeData] == nil {
+                try? FileManager.default.removeItem(at: resumeFile(key))
+            }
             if ns.code == NSURLErrorCannotWriteToFile || ns.code == NSFileWriteOutOfSpaceError {
                 fail(key, Downloads.reasonNoSpace)
             } else {
@@ -435,10 +474,17 @@ func downloadStatusText(_ status: DownloadStatus?, item: DownloadItem) -> String
     case .done:
         return "\(L("downloaded")) · \(formatBytes(status.total))"
     case .running:
+        var parts: [String] = []
         if let f = status.fraction {
-            return "\(L("downloading_pct", Int(f * 100))) · \(formatBytes(status.bytes)) / \(formatBytes(status.total))"
+            parts.append(L("downloading_pct", Int(f * 100)))
+            parts.append("\(formatBytes(status.bytes)) / \(formatBytes(status.total))")
+        } else {
+            parts.append(L("downloading"))
+            parts.append(formatBytes(status.bytes))
         }
-        return "\(L("downloading")) · \(formatBytes(status.bytes))"
+        if status.speed > 1 { parts.append("\(formatBytes(Int64(status.speed)))/s") }
+        if let eta = status.eta { parts.append(L("time_left", formatDuration(eta))) }
+        return parts.joined(separator: " · ")
     case .queued, .paused:
         if status.reason == Downloads.reasonRetrying { return L("dl_retrying") }
         if !Connectivity.shared.isOnline { return L("download_paused") }
@@ -457,4 +503,16 @@ func downloadStatusText(_ status: DownloadStatus?, item: DownloadItem) -> String
         default: return L("dl_err_code", status.reason)
         }
     }
+}
+
+/// "1 hr 5 min", "12 min", "40 sec" in the app's language.
+func formatDuration(_ seconds: Double) -> String {
+    let f = DateComponentsFormatter()
+    f.unitsStyle = .abbreviated
+    f.allowedUnits = seconds >= 3600 ? [.hour, .minute] : (seconds >= 60 ? [.minute] : [.second])
+    f.maximumUnitCount = 2
+    var cal = Calendar.current
+    cal.locale = L10n.shared.locale
+    f.calendar = cal
+    return f.string(from: max(seconds, 1)) ?? ""
 }

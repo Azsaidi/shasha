@@ -3,75 +3,118 @@ import UIKit
 
 // MARK: - Images
 
-/// Downloaded images kept in memory (and in the URL cache on disk).
+/// Downloaded images kept in memory (and in the URL cache on disk). A download is cancelled when
+/// every poster waiting for it has scrolled away, so fast scrolling doesn't fetch everything.
 @MainActor
 final class ImageCache {
     static let shared = ImageCache()
     private let cache = NSCache<NSString, UIImage>()
-    private var running: [String: Task<UIImage?, Never>] = [:]
 
-    init() { cache.countLimit = 600 }
+    @MainActor
+    private final class Job {
+        var task: Task<UIImage?, Never>?
+        var waiters = 0
+    }
+    private var running: [String: Job] = [:]
+
+    init() {
+        cache.totalCostLimit = 120 << 20
+    }
 
     func cached(_ url: String) -> UIImage? { cache.object(forKey: url as NSString) }
 
     func load(_ url: String) async -> UIImage? {
         if let image = cached(url) { return image }
-        if let task = running[url] { return await task.value }
-        let task = Task.detached(priority: .utility) { () -> UIImage? in
-            guard let u = URL(string: url) else { return nil }
-            var request = URLRequest(url: u)
-            request.cachePolicy = .returnCacheDataElseLoad
-            guard let result = try? await Http.session.data(for: request),
-                  let image = UIImage(data: result.0) else { return nil }
-            // Shrink big posters so scrolling stays smooth.
-            let maxSide: CGFloat = 600
-            let side = max(image.size.width, image.size.height)
-            if side > maxSide, let small = image.preparingThumbnail(of: CGSize(width: image.size.width * maxSide / side,
-                                                                                height: image.size.height * maxSide / side)) {
-                return small
+        let job = running[url] ?? start(url)
+        job.waiters += 1
+        guard let task = job.task else { return nil }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { @MainActor in
+                job.waiters -= 1
+                if job.waiters <= 0 { job.task?.cancel() }
             }
-            return image.preparingForDisplay() ?? image
         }
-        running[url] = task
-        let image = await task.value
-        running[url] = nil
-        if let image { cache.setObject(image, forKey: url as NSString) }
-        return image
+    }
+
+    private func start(_ url: String) -> Job {
+        let job = Job()
+        running[url] = job
+        job.task = Task {
+            let image = await ImageCache.fetch(url)
+            if let image {
+                let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+                self.cache.setObject(image, forKey: url as NSString, cost: cost)
+            }
+            if self.running[url] === job { self.running[url] = nil }
+            return image
+        }
+        return job
+    }
+
+    /// Runs off the main thread: download, then shrink to poster size and decode.
+    nonisolated private static func fetch(_ url: String) async -> UIImage? {
+        guard let u = URL(string: url) else { return nil }
+        var request = URLRequest(url: u)
+        request.cachePolicy = .returnCacheDataElseLoad
+        request.timeoutInterval = 20
+        guard let result = try? await Http.session.data(for: request), !Task.isCancelled,
+              let image = UIImage(data: result.0) else { return nil }
+        let maxSide: CGFloat = 480
+        let side = max(image.size.width, image.size.height)
+        if side > maxSide {
+            let size = CGSize(width: image.size.width * maxSide / side, height: image.size.height * maxSide / side)
+            if let small = await image.byPreparingThumbnail(ofSize: size) { return small }
+        }
+        return await image.byPreparingForDisplay() ?? image
     }
 }
 
+/// An image that fills (or fits) exactly the space it's given and never spills outside it.
 struct CachedImage: View {
     let url: String?
     var contentMode: ContentMode = .fill
     var placeholder: String = "photo"
     @State private var image: UIImage?
 
+    init(url: String?, contentMode: ContentMode = .fill, placeholder: String = "photo") {
+        self.url = url
+        self.contentMode = contentMode
+        self.placeholder = placeholder
+        _image = State(initialValue: url.flatMap { ImageCache.shared.cached($0) })
+    }
+
     var body: some View {
-        ZStack {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: contentMode)
-            } else {
-                Image(systemName: placeholder)
-                    .font(.title3)
-                    .foregroundStyle(.white.opacity(0.25))
+        Color.clear
+            .overlay {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: contentMode)
+                } else {
+                    Image(systemName: placeholder)
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.25))
+                }
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .task(id: url) {
-            guard let url, !url.isEmpty else {
+            .clipped()
+            .task(id: url) {
+                guard let url, !url.isEmpty else {
+                    image = nil
+                    return
+                }
+                if let hit = ImageCache.shared.cached(url) {
+                    if image !== hit { image = hit }
+                    return
+                }
                 image = nil
-                return
+                // Posters that only fly past while scrolling aren't downloaded.
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                guard !Task.isCancelled else { return }
+                let loaded = await ImageCache.shared.load(url)
+                if !Task.isCancelled { image = loaded }
             }
-            if let hit = ImageCache.shared.cached(url) {
-                image = hit
-                return
-            }
-            image = nil
-            image = await ImageCache.shared.load(url)
-        }
     }
 }
 
@@ -88,43 +131,40 @@ struct PosterCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .bottomLeading) {
-                Theme.card
-                CachedImage(url: image, placeholder: "film")
-                if let progress, progress > 0 {
-                    ProgressBar(value: progress).padding(6)
+            Theme.card
+                .aspectRatio(2 / 3, contentMode: .fit)
+                .overlay { CachedImage(url: image, placeholder: "film") }
+                .overlay(alignment: .bottom) {
+                    if let progress, progress > 0 { ProgressBar(value: progress).padding(6) }
                 }
-            }
-            .aspectRatio(2 / 3, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(alignment: .topTrailing) {
-                HStack(spacing: 4) {
-                    if downloaded { cornerIcon("arrow.down.circle.fill") }
-                    if favourite { cornerIcon("star.fill", .yellow) }
+                .overlay(alignment: .topTrailing) {
+                    HStack(spacing: 4) {
+                        if downloaded { cornerIcon("arrow.down.circle.fill") }
+                        if favourite { cornerIcon("star.fill", .yellow) }
+                    }
+                    .padding(6)
                 }
-                .padding(6)
-            }
-            .overlay(alignment: .topLeading) {
-                if let badge {
-                    Text(badge)
-                        .font(.caption2.bold())
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Theme.accent, in: Capsule())
-                        .foregroundStyle(.black)
-                        .padding(6)
+                .overlay(alignment: .topLeading) {
+                    if let badge {
+                        Text(badge)
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Theme.accent, in: Capsule())
+                            .foregroundStyle(.black)
+                            .padding(6)
+                    }
                 }
-            }
+                .clipShape(RoundedRectangle(cornerRadius: 10))
             Text(title)
                 .font(.caption.weight(.semibold))
                 .lineLimit(2, reservesSpace: true)
                 .foregroundStyle(.white)
-            if let subtitle {
-                Text(subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(subtitle ?? " ")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
         .contentShape(Rectangle())
     }
@@ -148,36 +188,40 @@ struct WideCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .bottomLeading) {
-                Theme.card
-                CachedImage(url: image, placeholder: "play.rectangle")
-                LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
-                if progress > 0 { ProgressBar(value: progress).padding(8) }
-                if let badge {
-                    Text(badge)
-                        .font(.caption2.bold())
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Theme.accent, in: Capsule())
-                        .foregroundStyle(.black)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            Theme.card
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay { CachedImage(url: image, placeholder: "play.rectangle") }
+                .overlay {
+                    LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
                 }
-            }
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(alignment: .bottom) {
+                    if progress > 0 { ProgressBar(value: progress).padding(8) }
+                }
+                .overlay(alignment: .topLeading) {
+                    if let badge {
+                        Text(badge)
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Theme.accent, in: Capsule())
+                            .foregroundStyle(.black)
+                            .padding(8)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 10))
             Text(title)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
-            if let subtitle {
-                Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }
+            Text(subtitle ?? " ")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
         .contentShape(Rectangle())
     }
 }
 
-/// Square-ish channel logo tile.
+/// Channel logo tile.
 struct ChannelCard: View {
     let title: String
     let image: String?
@@ -185,23 +229,55 @@ struct ChannelCard: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ZStack {
-                Theme.card
-                CachedImage(url: image, contentMode: .fit, placeholder: "tv")
-                    .padding(12)
-            }
-            .aspectRatio(16 / 10, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(alignment: .topTrailing) {
-                if favourite {
-                    Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow).padding(6)
+            Theme.card
+                .aspectRatio(16 / 10, contentMode: .fit)
+                .overlay { CachedImage(url: image, contentMode: .fit, placeholder: "tv").padding(12) }
+                .overlay(alignment: .topTrailing) {
+                    if favourite {
+                        Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow).padding(6)
+                    }
                 }
-            }
+                .clipShape(RoundedRectangle(cornerRadius: 10))
             Text(title)
                 .font(.caption.weight(.medium))
                 .lineLimit(1)
         }
         .contentShape(Rectangle())
+    }
+}
+
+/// Buttons that all share one height and shape.
+struct PillLabel: ViewModifier {
+    var prominent = false
+    var square = false
+    var compact = false
+
+    func body(content: Content) -> some View {
+        let height: CGFloat = compact ? 38 : 50
+        content
+            .font(compact ? .subheadline.weight(.semibold) : .body.weight(.semibold))
+            .lineLimit(1)
+            .foregroundStyle(prominent ? Color.black : Color.white)
+            .padding(.horizontal, square ? 0 : 16)
+            .frame(maxWidth: square ? nil : .infinity)
+            .frame(width: square ? height : nil, height: height)
+            .background(prominent ? Theme.accent : Theme.cardHigh, in: Capsule())
+            .contentShape(Capsule())
+    }
+}
+
+struct PressableStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+extension View {
+    func pill(prominent: Bool = false, square: Bool = false, compact: Bool = false) -> some View {
+        modifier(PillLabel(prominent: prominent, square: square, compact: compact))
     }
 }
 
@@ -313,7 +389,7 @@ struct Banners: View {
                 .background(Color.orange.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
             }
             if let r = session.refresh {
-                RefreshBanner(state: r, bytes: session.downloadBytes[r.type] ?? 0)
+                RefreshBanner(state: r, progress: session.progress)
             }
             if !multi.items.isEmpty {
                 HStack(spacing: 10) {
@@ -338,7 +414,8 @@ struct Banners: View {
 
 struct RefreshBanner: View {
     let state: RefreshState
-    let bytes: Int64
+    @ObservedObject var progress: ListProgress
+    private var bytes: Int64 { progress.bytes[state.type] ?? 0 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

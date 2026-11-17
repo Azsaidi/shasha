@@ -73,7 +73,7 @@ struct SearchView: View {
         if let live = results[.live], !live.isEmpty {
             Text(L("tab_live")).font(.title3.bold()).padding(.horizontal, 16)
             ForEach(Array(live.enumerated()), id: \.element.id) { i, item in
-                ChannelRow(item: item) {
+                ChannelRow(item: item, favourite: session.isFavourite(item)) {
                     session.rememberSearch(query)
                     Playback.channels(live, index: i)
                 }
@@ -117,9 +117,9 @@ struct SearchView: View {
         var found: [ContentType: [StreamItem]] = [:]
         for type in [ContentType.live, .movie, .series] {
             guard let lib = try? await session.load(type), !Task.isCancelled else { continue }
-            let items = session.visible(lib).items
+            let hide = session.hideAdult
             let matches = await Task.detached(priority: .userInitiated) {
-                Array(items.lazy.filter { $0.name.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil }.prefix(60))
+                Array(Session.filterAdult(lib, hide: hide).items.lazy.filter { $0.name.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil }.prefix(60))
             }.value
             guard !Task.isCancelled else { return }
             found[type] = matches

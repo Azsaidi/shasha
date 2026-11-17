@@ -2,7 +2,6 @@ import SwiftUI
 
 struct HomeView: View {
     @ObservedObject private var session = Session.shared
-    @ObservedObject private var downloads = Downloads.shared
     @State private var newMovies: [StreamItem] = []
     @State private var newSeries: [StreamItem] = []
 
@@ -49,7 +48,7 @@ struct HomeView: View {
                         ForEach(Array(recent.enumerated()), id: \.element.id) { i, entry in
                             Button { Playback.recentChannels(recent, index: i) } label: {
                                 ChannelCard(title: entry.title, image: entry.image,
-                                            favourite: session.favourites.contains { $0.type == .live && $0.id == entry.streamId })
+                                            favourite: session.favouriteUids.contains("\(ContentType.live.rawValue):\(entry.streamId)"))
                                     .frame(width: 130)
                             }
                             .buttonStyle(.plain)
@@ -118,7 +117,7 @@ struct HomeView: View {
         NavigationLink(value: item) {
             PosterCard(title: item.name, image: item.icon, subtitle: item.year.map(String.init),
                        progress: progress(item), favourite: session.isFavourite(item),
-                       downloaded: item.type == .movie && downloads.localURL(.movie, item.id) != nil)
+                       downloaded: item.type == .movie && Downloads.shared.isDownloaded(.movie, item.id))
                 .frame(width: 118)
         }
         .buttonStyle(.plain)
@@ -147,14 +146,17 @@ struct HomeView: View {
         async let movies = try? session.load(.movie)
         async let series = try? session.load(.series)
         let m = await movies, s = await series
-        newMovies = recent(m)
-        newSeries = recent(s)
+        newMovies = await recent(m)
+        newSeries = await recent(s)
     }
 
-    private func recent(_ lib: Library?) -> [StreamItem] {
+    private func recent(_ lib: Library?) async -> [StreamItem] {
         guard let lib else { return [] }
-        let visible = session.visible(lib).items
-        return Array(visible.filter { $0.added != nil }.sorted { ($0.added ?? 0) > ($1.added ?? 0) }.prefix(20))
+        let hide = session.hideAdult
+        return await Task.detached(priority: .utility) {
+            let visible = Session.filterAdult(lib, hide: hide).items
+            return Array(visible.filter { $0.added != nil }.sorted { ($0.added ?? 0) > ($1.added ?? 0) }.prefix(20))
+        }.value
     }
 }
 

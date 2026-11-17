@@ -110,16 +110,17 @@ struct PlayerScreen: View {
             }
 
             ToastOverlay()
+
+            if model.hiding {
+                Color.black.ignoresSafeArea()
+            }
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
         .preferredColorScheme(.dark)
         .onAppear {
-            model.start()
             Orientation.set(Orientation.player)
-        }
-        .onDisappear {
-            Orientation.set(Orientation.appDefault)
+            model.start()
         }
         .sheet(isPresented: $showTracks) {
             TracksSheet(engine: model.engine)
@@ -268,7 +269,7 @@ struct PlayerScreen: View {
             if isVod {
                 roundButton("gobackward.10", 26, L("skip_back")) { model.skip(-10) }
             }
-            roundButton(model.isPlaying ? "pause.fill" : "play.fill", 34, model.isPlaying ? L("pause") : L("play")) {
+            roundButton(model.wantsPlay ? "pause.fill" : "play.fill", 34, model.wantsPlay ? L("pause") : L("play")) {
                 model.togglePlay()
             }
             .frame(width: 76, height: 76)

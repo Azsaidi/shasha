@@ -47,7 +47,7 @@ private struct FavouritesList: View {
                 if !channels.isEmpty {
                     Text(L("favourite_channels")).font(.title3.bold()).padding(.horizontal, 16)
                     ForEach(channels) { item in
-                        ChannelRow(item: item) { Actions.open(item, list: channels) }
+                        ChannelRow(item: item, favourite: true) { Actions.open(item, list: channels) }
                             .contextMenu { StreamItemMenu(item: item, list: channels) }
                             .padding(.horizontal, 16)
                     }
