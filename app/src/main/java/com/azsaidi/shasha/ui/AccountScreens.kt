@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -50,6 +51,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -139,7 +141,7 @@ fun LoginScreen(
                 TopAppBar(
                     title = { Text("Add account") },
                     navigationIcon = {
-                        IconButton(onClick = onBack) {
+                        IconButton(onClick = onBack, modifier = Modifier.focusRing(CircleShape)) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     },
@@ -203,7 +205,7 @@ fun LoginScreen(
                 shape = shape,
                 visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
-                    IconButton(onClick = { showPassword = !showPassword }) {
+                    IconButton(onClick = { showPassword = !showPassword }, modifier = Modifier.focusRing(CircleShape)) {
                         Icon(
                             if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
                             contentDescription = if (showPassword) "Hide password" else "Show password",
@@ -233,7 +235,9 @@ fun LoginScreen(
                 onClick = { submit() },
                 enabled = !loading,
                 shape = shape,
-                modifier = fieldModifier.height(52.dp),
+                modifier = fieldModifier
+                    .height(52.dp)
+                    .focusRing(shape),
             ) {
                 if (loading) {
                     CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
@@ -265,6 +269,7 @@ fun AccountsScreen(
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onAdd,
+                modifier = Modifier.focusRing(RoundedCornerShape(16.dp)),
                 icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                 text = { Text("Add account") },
             )
@@ -279,11 +284,14 @@ fun AccountsScreen(
                     },
                     leadingContent = { Icon(Icons.Filled.AccountCircle, contentDescription = null) },
                     trailingContent = {
-                        IconButton(onClick = { toDelete = account }) {
+                        IconButton(onClick = { toDelete = account }, modifier = Modifier.focusRing(CircleShape)) {
                             Icon(Icons.Filled.Delete, contentDescription = "Remove")
                         }
                     },
-                    modifier = Modifier.clickable { onOpen(account) },
+                    modifier = Modifier
+                        .focusRing(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onOpen(account) },
                 )
             }
         }

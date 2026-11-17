@@ -110,7 +110,7 @@ fun MessageView(title: String, message: String? = null, action: String? = null, 
         }
         if (action != null && onAction != null) {
             Spacer(Modifier.height(20.dp))
-            Button(onClick = onAction) { Text(action) }
+            Button(onClick = onAction, modifier = Modifier.focusRing(RoundedCornerShape(24.dp))) { Text(action) }
         }
     }
 }

@@ -10,7 +10,9 @@ import android.os.Bundle
 import android.text.TextUtils
 import android.util.Rational
 import android.util.TypedValue
+import android.graphics.drawable.StateListDrawable
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -20,6 +22,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.addCallback
 import androidx.annotation.OptIn
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -41,6 +44,7 @@ import androidx.media3.ui.PlayerView
 import com.azsaidi.shasha.R
 import com.azsaidi.shasha.data.Http
 import com.azsaidi.shasha.data.Store
+import com.azsaidi.shasha.ui.isTelevision
 
 @OptIn(UnstableApi::class)
 class PlayerActivity : ComponentActivity() {
@@ -61,6 +65,7 @@ class PlayerActivity : ComponentActivity() {
         AspectRatioFrameLayout.RESIZE_MODE_FILL to "Stretch",
     )
     private var resizeIndex = 0
+    private var isTv = false
 
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -90,8 +95,14 @@ class PlayerActivity : ComponentActivity() {
         }
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
+        isTv = isTelevision()
         buildViews()
         hideSystemBars()
+
+        // On TV, Back first hides the on-screen controls, then leaves the player.
+        onBackPressedDispatcher.addCallback(this) {
+            if (isTv && playerView.isControllerFullyVisible) playerView.hideController() else finish()
+        }
 
         addOnPictureInPictureModeChangedListener { info ->
             val inPip = info.isInPictureInPictureMode
@@ -135,6 +146,38 @@ class PlayerActivity : ComponentActivity() {
         if (player?.isPlaying == true) enterPip()
     }
 
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val p = player
+        if (p != null && event.action == KeyEvent.ACTION_DOWN) {
+            val controlsShown = playerView.isControllerFullyVisible
+            val live = items.getOrNull(p.currentMediaItemIndex)?.isLive == true
+            val zappable = live && items.size > 1
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_CHANNEL_UP -> if (zappable) { changeChannel(+1); return true }
+                KeyEvent.KEYCODE_CHANNEL_DOWN -> if (zappable) { changeChannel(-1); return true }
+                // With the controls hidden: up/down changes channel, left/right skips 10 s.
+                KeyEvent.KEYCODE_DPAD_UP -> if (!controlsShown && zappable) { changeChannel(+1); return true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> if (!controlsShown && zappable) { changeChannel(-1); return true }
+                KeyEvent.KEYCODE_DPAD_LEFT -> if (!controlsShown && !live) { p.seekBack(); playerView.showController(); return true }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> if (!controlsShown && !live) { p.seekForward(); playerView.showController(); return true }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun changeChannel(step: Int) {
+        val p = player ?: return
+        val count = items.size
+        if (count < 2) return
+        val target = ((p.currentMediaItemIndex + step) % count + count) % count
+        p.seekToDefaultPosition(target)
+        if (p.playbackState == Player.STATE_IDLE) p.prepare()
+        p.play()
+        items.getOrNull(target)?.let { titleView.text = it.title }
+        topBar.visibility = View.VISIBLE
+        playerView.showController()
+    }
+
     private fun dp(value: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
 
@@ -153,7 +196,8 @@ class PlayerActivity : ComponentActivity() {
 
         val back = ImageButton(this).apply {
             setImageResource(R.drawable.ic_back)
-            background = null
+            background = buttonBackground(0x00FFFFFF, dp(22).toFloat())
+            isFocusable = true
             contentDescription = "Back"
             setOnClickListener { finish() }
         }
@@ -202,11 +246,23 @@ class PlayerActivity : ComponentActivity() {
         setTextColor(Color.WHITE)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         setPadding(dp(14), dp(7), dp(14), dp(7))
-        background = GradientDrawable().apply {
-            cornerRadius = dp(18).toFloat()
-            setColor(0x33FFFFFF)
-        }
+        background = buttonBackground(0x33FFFFFF, dp(18).toFloat())
+        isFocusable = true
         setOnClickListener { onClick() }
+    }
+
+    /** Normal fill, plus a bright outline when selected with the remote. */
+    private fun buttonBackground(fill: Int, radius: Float): StateListDrawable {
+        fun shape(color: Int, stroke: Boolean) = GradientDrawable().apply {
+            cornerRadius = radius
+            setColor(color)
+            if (stroke) setStroke(dp(3), 0xFF38BDF8.toInt())
+        }
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), shape(0x55FFFFFF, true))
+            addState(intArrayOf(android.R.attr.state_pressed), shape(0x55FFFFFF, false))
+            addState(intArrayOf(), shape(fill, false))
+        }
     }
 
     private fun mediaItem(item: PlayItem, url: String): MediaItem {
@@ -229,6 +285,8 @@ class PlayerActivity : ComponentActivity() {
 
         val exo = ExoPlayer.Builder(this)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setSeekBackIncrementMs(10_000)
+            .setSeekForwardIncrementMs(10_000)
             .build()
         exo.setAudioAttributes(
             AudioAttributes.Builder()

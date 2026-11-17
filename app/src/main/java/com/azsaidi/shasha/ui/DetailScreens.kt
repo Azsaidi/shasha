@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -45,6 +47,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -73,7 +78,7 @@ private fun DetailScaffold(title: String, onBack: () -> Unit, content: @Composab
             TopAppBar(
                 title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = onBack, modifier = Modifier.focusRing(CircleShape)) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -87,7 +92,7 @@ private fun DetailScaffold(title: String, onBack: () -> Unit, content: @Composab
 private fun FavoriteButton(item: StreamItem?) {
     if (item == null) return
     val favorite = Session.isFavorite(item)
-    OutlinedButton(onClick = { Session.toggleFavorite(item) }, modifier = Modifier.fillMaxWidth()) {
+    OutlinedButton(onClick = { Session.toggleFavorite(item) }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
         Icon(
             if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
             contentDescription = null,
@@ -114,7 +119,9 @@ private fun ExpandableText(text: String) {
         style = MaterialTheme.typography.bodyMedium,
         maxLines = if (expanded) Int.MAX_VALUE else 4,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.clickable { expanded = !expanded },
+        modifier = Modifier
+            .focusRing(RoundedCornerShape(6.dp))
+            .clickable { expanded = !expanded },
     )
 }
 
@@ -135,6 +142,9 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
         }
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
+    val isTv = rememberIsTv()
+    val playFocus = remember { FocusRequester() }
+    if (isTv) LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
 
     val accountId = Session.account?.id.orEmpty()
     val resumeKey = "movie:$accountId:$id"
@@ -177,13 +187,20 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
                 }
             }
 
-            Button(onClick = { play(fromStart = false) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+            Button(
+                onClick = { play(fromStart = false) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .focusRequester(playFocus)
+                    .focusRing(ButtonShape),
+            ) {
                 Icon(Icons.Filled.PlayArrow, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(if (saved > 0) "Resume from ${formatTime(saved)}" else "Play")
             }
             if (saved > 0) {
-                TextButton(onClick = { play(fromStart = true) }, modifier = Modifier.fillMaxWidth()) {
+                TextButton(onClick = { play(fromStart = true) }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
                     Text("Start from the beginning")
                 }
             }
@@ -207,6 +224,8 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
     var state by remember { mutableStateOf<Load<SeriesInfo>>(Load.Loading) }
     var retry by remember { mutableIntStateOf(0) }
     var selectedSeason by rememberSaveable { mutableIntStateOf(-1) }
+    val isTv = rememberIsTv()
+    val firstEpisode = remember { FocusRequester() }
 
     LaunchedEffect(id, retry) {
         state = Load.Loading
@@ -233,6 +252,9 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                 val season = if (selectedSeason in seasons) selectedSeason else seasons.firstOrNull() ?: -1
                 val episodes = info.seasons[season].orEmpty()
 
+                if (isTv) {
+                    LaunchedEffect(episodes) { runCatching { firstEpisode.requestFocus() } }
+                }
                 LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(bottom = 24.dp)) {
                     item {
                         SeriesHeader(item, info, title)
@@ -251,6 +273,7 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                                             selected = number == season,
                                             onClick = { selectedSeason = number },
                                             label = { Text("Season $number") },
+                                            modifier = Modifier.focusRing(RoundedCornerShape(8.dp)),
                                         )
                                     }
                                 }
@@ -266,7 +289,8 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                             }
                         }
                         itemsIndexed(episodes) { index, episode ->
-                            EpisodeRow(episode, info.cover ?: item?.icon) {
+                            val rowModifier = if (index == 0) Modifier.focusRequester(firstEpisode) else Modifier
+                            EpisodeRow(episode, info.cover ?: item?.icon, rowModifier) {
                                 val api = Session.api ?: return@EpisodeRow
                                 val accountId = Session.account?.id.orEmpty()
                                 val queue = episodes.map { ep ->
@@ -321,7 +345,7 @@ private fun SeriesHeader(item: StreamItem?, info: SeriesInfo, title: String) {
 }
 
 @Composable
-private fun EpisodeRow(episode: Episode, fallbackImage: String?, onClick: () -> Unit) {
+private fun EpisodeRow(episode: Episode, fallbackImage: String?, modifier: Modifier = Modifier, onClick: () -> Unit) {
     ListItem(
         headlineContent = {
             Text("${episode.number}. ${episode.title}", maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -338,6 +362,9 @@ private fun EpisodeRow(episode: Episode, fallbackImage: String?, onClick: () -> 
                 crop = true,
             )
         },
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = modifier
+            .focusRing(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
     )
 }
