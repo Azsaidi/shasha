@@ -172,7 +172,6 @@ private fun HomeShelves(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val memory = rememberFocusMemory("home")
-    var toRemove by remember { mutableStateOf<WatchEntry?>(null) }
 
     // Reading the state lists here makes the page update as soon as something is watched.
     val history = Session.history.toList()
@@ -208,7 +207,12 @@ private fun HomeShelves(
                             memory.opened("cw-${entry.key}")
                             scope.launch { Playback.resume(context, entry) }
                         },
-                        onLongClick = { toRemove = entry },
+                        onLongClick = {
+                            showHistoryMenu(context, entry) {
+                                memory.opened("cw-${entry.key}")
+                                scope.launch { Playback.resume(context, entry) }
+                            }
+                        },
                     )
                 }
             }
@@ -217,7 +221,6 @@ private fun HomeShelves(
         if (recentChannels.isNotEmpty()) {
             shelf(R.string.recent_channels) {
                 itemsIndexed(recentChannels, key = { _, e -> e.key }) { index, entry ->
-                    val asItem = StreamItem(entry.streamId, entry.title, entry.image, null, ContentType.LIVE, null, null)
                     ChannelTile(
                         entry.title,
                         entry.image,
@@ -226,7 +229,12 @@ private fun HomeShelves(
                             memory.opened("rc-${entry.key}")
                             Playback.recentChannels(context, recentChannels, index)
                         },
-                        onLongClick = { toggleFavouriteWithToast(context, asItem) },
+                        onLongClick = {
+                            showHistoryMenu(context, entry) {
+                                memory.opened("rc-${entry.key}")
+                                Playback.recentChannels(context, recentChannels, index)
+                            }
+                        },
                     )
                 }
             }
@@ -243,7 +251,12 @@ private fun HomeShelves(
                             memory.opened("fc-${item.id}")
                             onOpen(item, favoriteChannels)
                         },
-                        onLongClick = { toggleFavouriteWithToast(context, item) },
+                        onLongClick = {
+                            showStreamItemMenu(context, item) {
+                                memory.opened("fc-${item.id}")
+                                onOpen(item, favoriteChannels)
+                            }
+                        },
                     )
                 }
             }
@@ -274,24 +287,6 @@ private fun HomeShelves(
         }
     }
 
-    toRemove?.let { entry ->
-        AlertDialog(
-            onDismissRequest = { toRemove = null },
-            title = { Text(stringResource(R.string.remove_continue_title)) },
-            text = { Text(entry.title) },
-            confirmButton = {
-                TextButton(onClick = {
-                    Session.removeFromHistory(entry)
-                    toRemove = null
-                }, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) { Text(stringResource(R.string.remove)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { toRemove = null }, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
 }
 
 internal fun LazyListScope.shelf(@StringRes title: Int, content: LazyListScope.() -> Unit) {

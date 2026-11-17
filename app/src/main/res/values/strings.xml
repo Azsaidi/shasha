@@ -75,7 +75,7 @@
 
     <!-- Favourites tab -->
     <string name="no_favourites">No favourites yet</string>
-    <string name="no_favourites_hint">Press and hold a channel or poster (or tap its star) to add it here.</string>
+    <string name="no_favourites_hint">Press and hold a channel or poster for options, or tap a channel’s star, to add it here.</string>
 
     <!-- Settings -->
     <string name="server">Server</string>
@@ -201,4 +201,17 @@
     <string name="next_episode_in">Next episode in %1$d</string>
     <string name="play_now">Play now</string>
     <string name="next_episode">Next episode</string>
+    <string name="remove_from_recent">Remove from recently watched</string>
+    <string name="remove_from_continue">Remove from Continue watching</string>
+    <string name="mark_watched">Mark as watched</string>
+    <string name="mark_unwatched">Mark as unwatched</string>
+    <string name="open">Open</string>
+    <string name="clear_watch_history">Clear watch history</string>
+    <string name="clear_watch_history_body">Continue watching, recently watched channels and saved positions will be removed for this account.</string>
+    <string name="clear_search_history">Clear search history</string>
+    <string name="clear_search_history_body">Your recent searches will be removed.</string>
+    <string name="history_cleared">Watch history cleared</string>
+    <string name="searches_cleared">Search history cleared</string>
+    <string name="remove_search">Remove from recent searches</string>
+    <string name="history_section">History</string>
 </resources>

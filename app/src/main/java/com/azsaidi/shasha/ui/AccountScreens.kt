@@ -2,8 +2,12 @@ package com.azsaidi.shasha.ui
 
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -307,7 +311,7 @@ internal fun toastSaved(context: Context) {
     Toast.makeText(context, context.getString(R.string.saved_changes), Toast.LENGTH_SHORT).show()
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun AccountsScreen(
     onOpen: (Account) -> Unit,
@@ -315,6 +319,7 @@ fun AccountsScreen(
     onEdit: (Account) -> Unit,
     onEmpty: () -> Unit,
 ) {
+    val context = LocalContext.current
     var accounts by remember { mutableStateOf(Store.accounts()) }
     var toDelete by remember { mutableStateOf<Account?>(null) }
 
@@ -331,6 +336,10 @@ fun AccountsScreen(
     ) { padding ->
         LazyColumn(Modifier.padding(padding)) {
             items(accounts) { account ->
+                // The remote moves right from the row to the edit and delete buttons and back.
+                val rowFocus = remember { FocusRequester() }
+                val editFocus = remember { FocusRequester() }
+                val deleteFocus = remember { FocusRequester() }
                 ListItem(
                     headlineContent = { Text(account.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     supportingContent = {
@@ -339,18 +348,46 @@ fun AccountsScreen(
                     leadingContent = { Icon(Icons.Filled.AccountCircle, contentDescription = null) },
                     trailingContent = {
                         Row {
-                            IconButton(onClick = { onEdit(account) }, modifier = Modifier.focusRing(CircleShape)) {
+                            IconButton(
+                                onClick = { onEdit(account) },
+                                modifier = Modifier
+                                    .focusRequester(editFocus)
+                                    .focusProperties {
+                                        start = rowFocus
+                                        end = deleteFocus
+                                    }
+                                    .focusRing(CircleShape),
+                            ) {
                                 Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.edit_playlist))
                             }
-                            IconButton(onClick = { toDelete = account }, modifier = Modifier.focusRing(CircleShape)) {
+                            IconButton(
+                                onClick = { toDelete = account },
+                                modifier = Modifier
+                                    .focusRequester(deleteFocus)
+                                    .focusProperties { start = editFocus }
+                                    .focusRing(CircleShape),
+                            ) {
                                 Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.remove))
                             }
                         }
                     },
                     modifier = Modifier
+                        .focusRequester(rowFocus)
+                        .focusProperties { end = editFocus }
                         .focusRing(RoundedCornerShape(10.dp))
                         .clip(RoundedCornerShape(10.dp))
-                        .clickable { onOpen(account) },
+                        .combinedClickable(
+                            onClick = { onOpen(account) },
+                            onLongClick = {
+                                showAccountMenu(
+                                    account.name,
+                                    context,
+                                    onOpen = { onOpen(account) },
+                                    onEdit = { onEdit(account) },
+                                    onRemove = { toDelete = account },
+                                )
+                            },
+                        ),
                 )
             }
         }

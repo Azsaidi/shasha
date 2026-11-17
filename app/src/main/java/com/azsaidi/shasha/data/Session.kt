@@ -227,6 +227,11 @@ object Session {
         Store.saveSearches(searches.toList())
     }
 
+    fun removeSearch(query: String) {
+        searches.remove(query)
+        Store.saveSearches(searches.toList())
+    }
+
     fun clearSearches() {
         searches.clear()
         Store.saveSearches(emptyList())
@@ -304,6 +309,33 @@ object Session {
             history.removeAll { it.key == entry.key }
         }
         Store.saveHistory(acc.id, history.toList())
+    }
+
+    fun removeHistoryKey(key: String) {
+        val acc = account ?: return
+        if (history.removeAll { it.key == key }) Store.saveHistory(acc.id, history.toList())
+    }
+
+    fun removeSeriesHistory(seriesId: String) {
+        val acc = account ?: return
+        if (history.removeAll { it.kind == WatchKind.EPISODE && it.seriesId == seriesId }) {
+            Store.saveHistory(acc.id, history.toList())
+        }
+    }
+
+    fun hasSeriesHistory(seriesId: String): Boolean =
+        history.any { it.kind == WatchKind.EPISODE && it.seriesId == seriesId }
+
+    /** Marks something as finished (keeps it out of Continue watching, shows a tick). */
+    fun markWatched(entry: WatchEntry) {
+        val acc = account ?: return
+        record(acc.id, entry.copy(position = 0, finished = true, upNext = false, updatedAt = System.currentTimeMillis()))
+    }
+
+    fun clearHistory() {
+        val acc = account ?: return
+        history.clear()
+        Store.saveHistory(acc.id, emptyList())
     }
 
     /** Movies and series to resume: the latest entry per movie / series, if it isn't finished. */

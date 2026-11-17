@@ -598,8 +598,10 @@ private fun Browser(
 }
 
 /** Search box in a dialog (for TV), with recent searches underneath. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun SearchDialog(initial: String, hint: String, onSearch: (String) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
     var text by remember { mutableStateOf(initial) }
     val focus = remember { FocusRequester() }
     val submit: (String) -> Unit = { q ->
@@ -647,7 +649,12 @@ internal fun SearchDialog(initial: String, hint: String, onSearch: (String) -> U
                                     .fillMaxWidth()
                                     .focusRing(RoundedCornerShape(8.dp))
                                     .clip(RoundedCornerShape(8.dp))
-                                    .clickable { submit(q) }
+                                    .combinedClickable(
+                                        onClick = { submit(q) },
+                                        onLongClick = {
+                                            ItemMenu.show(q, listOf(MenuAction(context.getString(R.string.remove_search), Icons.Filled.Delete) { Session.removeSearch(q) }))
+                                        },
+                                    )
                                     .padding(horizontal = 8.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -787,7 +794,12 @@ internal fun LiveRow(item: StreamItem, memory: FocusMemory? = null, onClick: () 
                     memory?.opened(key)
                     onClick()
                 },
-                onLongClick = { toggleFavouriteWithToast(context, item) },
+                onLongClick = {
+                    showStreamItemMenu(context, item) {
+                        memory?.opened(key)
+                        onClick()
+                    }
+                },
             ),
     )
 }
@@ -813,7 +825,12 @@ internal fun PosterCard(
                     memory?.opened(key)
                     onClick()
                 },
-                onLongClick = { toggleFavouriteWithToast(context, item) },
+                onLongClick = {
+                    showStreamItemMenu(context, item) {
+                        memory?.opened(key)
+                        onClick()
+                    }
+                },
             )
             .padding(4.dp)
     ) {
@@ -925,6 +942,8 @@ private fun SettingsTab(
     var autoPip by remember { mutableStateOf(Store.autoPip) }
     val language = remember { Language.current(context) }
     var confirmRemove by remember { mutableStateOf(false) }
+    var confirmClearHistory by remember { mutableStateOf(false) }
+    var confirmClearSearches by remember { mutableStateOf(false) }
 
     Column(
         Modifier
@@ -1023,6 +1042,18 @@ private fun SettingsTab(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        Text(stringResource(R.string.history_section), style = MaterialTheme.typography.titleSmall)
+        OutlinedButton(onClick = { confirmClearHistory = true }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
+            Icon(Icons.Filled.History, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.clear_watch_history))
+        }
+        OutlinedButton(onClick = { confirmClearSearches = true }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
+            Icon(Icons.Filled.Search, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.clear_search_history))
+        }
+
         Spacer(Modifier.size(4.dp))
         OutlinedButton(onClick = { refreshContent() }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
             Icon(Icons.Filled.Refresh, contentDescription = null)
@@ -1051,6 +1082,31 @@ private fun SettingsTab(
         )
     }
 
+    if (confirmClearHistory) {
+        ConfirmDialog(
+            title = stringResource(R.string.clear_watch_history),
+            body = stringResource(R.string.clear_watch_history_body),
+            confirm = stringResource(R.string.clear),
+            onConfirm = {
+                Session.clearHistory()
+                Toast.makeText(context, context.getString(R.string.history_cleared), Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { confirmClearHistory = false },
+        )
+    }
+    if (confirmClearSearches) {
+        ConfirmDialog(
+            title = stringResource(R.string.clear_search_history),
+            body = stringResource(R.string.clear_search_history_body),
+            confirm = stringResource(R.string.clear),
+            onConfirm = {
+                Session.clearSearches()
+                Toast.makeText(context, context.getString(R.string.searches_cleared), Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { confirmClearSearches = false },
+        )
+    }
+
     if (confirmRemove) {
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
@@ -1067,6 +1123,29 @@ private fun SettingsTab(
             dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
+}
+
+@Composable
+internal fun ConfirmDialog(title: String, body: String, confirm: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(body) },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onDismiss()
+                    onConfirm()
+                },
+                modifier = Modifier.focusRing(RoundedCornerShape(20.dp)),
+            ) { Text(confirm) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
 }
 
 @Composable

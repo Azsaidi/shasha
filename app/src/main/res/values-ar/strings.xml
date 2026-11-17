@@ -74,7 +74,7 @@
     <string name="nothing_found">لا توجد نتائج لـ «%1$s»</string>
 
     <string name="no_favourites">لا توجد مفضلات بعد</string>
-    <string name="no_favourites_hint">اضغط مطولًا على قناة أو ملصق (أو اضغط على النجمة) لإضافته هنا.</string>
+    <string name="no_favourites_hint">اضغط مطولًا على قناة أو ملصق لعرض الخيارات، أو اضغط على نجمة القناة، لإضافتها هنا.</string>
 
     <string name="server">الخادم</string>
     <string name="username">اسم المستخدم</string>
@@ -198,4 +198,17 @@
     <string name="next_episode_in">الحلقة التالية خلال %1$d</string>
     <string name="play_now">شغّل الآن</string>
     <string name="next_episode">الحلقة التالية</string>
+    <string name="remove_from_recent">إزالة من «شوهد مؤخرًا»</string>
+    <string name="remove_from_continue">إزالة من «تابع المشاهدة»</string>
+    <string name="mark_watched">تعليم كمُشاهَد</string>
+    <string name="mark_unwatched">تعليم كغير مُشاهَد</string>
+    <string name="open">فتح</string>
+    <string name="clear_watch_history">مسح سجل المشاهدة</string>
+    <string name="clear_watch_history_body">ستُزال قائمة «تابع المشاهدة» والقنوات التي شوهدت مؤخرًا ومواضع التوقف المحفوظة لهذا الحساب.</string>
+    <string name="clear_search_history">مسح سجل البحث</string>
+    <string name="clear_search_history_body">ستُزال عمليات البحث الأخيرة.</string>
+    <string name="history_cleared">تم مسح سجل المشاهدة</string>
+    <string name="searches_cleared">تم مسح سجل البحث</string>
+    <string name="remove_search">إزالة من عمليات البحث الأخيرة</string>
+    <string name="history_section">السجل</string>
 </resources>

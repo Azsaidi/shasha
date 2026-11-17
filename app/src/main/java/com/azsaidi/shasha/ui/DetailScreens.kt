@@ -1,6 +1,8 @@
 package com.azsaidi.shasha.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -374,10 +376,18 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                         }
                         itemsIndexed(episodes) { index, episode ->
                             val watch = Session.historyEntry(WatchKind.EPISODE, episode.id)
-                            EpisodeRow(episode, cover, watch, Modifier.remembered(memory, "ep-${episode.id}")) {
+                            val play = {
                                 memory.opened("ep-${episode.id}")
                                 playSeason(season, index, fromStart = false)
                             }
+                            EpisodeRow(
+                                episode,
+                                cover,
+                                watch,
+                                Modifier.remembered(memory, "ep-${episode.id}"),
+                                onLongClick = { showEpisodeMenu(context, episode, id, title, cover, play) },
+                                onClick = play,
+                            )
                         }
                     }
                 }
@@ -415,8 +425,16 @@ private fun SeriesHeader(item: StreamItem?, info: SeriesInfo, title: String) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun EpisodeRow(episode: Episode, fallbackImage: String?, watch: WatchEntry?, modifier: Modifier, onClick: () -> Unit) {
+private fun EpisodeRow(
+    episode: Episode,
+    fallbackImage: String?,
+    watch: WatchEntry?,
+    modifier: Modifier,
+    onLongClick: () -> Unit,
+    onClick: () -> Unit,
+) {
     ListItem(
         headlineContent = {
             Text("${episode.number}. ${episode.title}", maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -467,6 +485,6 @@ private fun EpisodeRow(episode: Episode, fallbackImage: String?, watch: WatchEnt
         modifier = modifier
             .focusRing(RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     )
 }

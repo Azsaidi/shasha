@@ -93,4 +93,7 @@ fun ShashaNav() {
             SeriesScreen(entry.arguments?.getString("id").orEmpty(), onBack = { nav.popBackStack() })
         }
     }
+
+    // Long-press options menu, shared by every screen.
+    ItemMenu.Host()
 }
