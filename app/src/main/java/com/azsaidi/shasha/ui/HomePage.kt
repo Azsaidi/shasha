@@ -1,8 +1,8 @@
 package com.azsaidi.shasha.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,7 +37,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,25 +53,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.azsaidi.shasha.R
 import com.azsaidi.shasha.data.ContentType
 import com.azsaidi.shasha.data.Library
 import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.StreamItem
 import com.azsaidi.shasha.data.WatchEntry
-import com.azsaidi.shasha.data.WatchKind
 import com.azsaidi.shasha.player.Playback
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** The Home tab: continue watching, recent channels, favorites, new arrivals and search across everything. */
+/** The Home tab: continue watching, recent channels, favourites, new arrivals and search across everything. */
 @Composable
 fun HomePage(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
-    val context = LocalContext.current
     val isTv = rememberIsTv()
     var query by rememberSaveable { mutableStateOf("") }
     var showSearch by remember { mutableStateOf(false) }
@@ -90,57 +89,58 @@ fun HomePage(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
     fun itemsOf(type: ContentType): List<StreamItem> =
         libraries[type]?.let { if (hideAdult) Session.visible(it).second else it.second }.orEmpty()
 
+    // Opening something from search results also saves the search.
+    val openFromHome: (StreamItem, List<StreamItem>) -> Unit = { item, list ->
+        if (query.isNotBlank()) Session.rememberSearch(query)
+        onOpen(item, list)
+    }
+
     Column(Modifier.fillMaxSize()) {
-        // Header: search + refresh
         Row(
             Modifier
                 .fillMaxWidth()
                 .padding(start = 16.dp, end = 8.dp, top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
         ) {
             if (isTv) {
                 Text(
-                    Session.account?.name ?: "Home",
+                    Session.account?.name ?: stringResource(R.string.tab_home),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .align(Alignment.CenterVertically),
                 )
                 FilterChip(
                     selected = query.isNotEmpty(),
                     onClick = { showSearch = true },
-                    label = { Text(query.ifEmpty { "Search everything" }, maxLines = 1) },
+                    label = { Text(query.ifEmpty { stringResource(R.string.search_everything) }, maxLines = 1) },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    modifier = Modifier.focusRing(RoundedCornerShape(8.dp)),
+                    modifier = Modifier
+                        .align(Alignment.CenterVertically)
+                        .focusRing(RoundedCornerShape(8.dp)),
                 )
                 if (query.isNotEmpty()) {
                     IconButton(onClick = { query = "" }, modifier = Modifier.focusRing(CircleShape)) {
-                        Icon(Icons.Filled.Close, contentDescription = "Clear search")
+                        Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.clear_search))
                     }
                 }
             } else {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("Search channels, movies, series") },
-                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (query.isNotEmpty()) {
-                            IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, contentDescription = "Clear search") }
-                        }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(28.dp),
+                PhoneSearchField(
+                    query = query,
+                    hint = stringResource(R.string.home_search_hint),
+                    onQueryChange = { query = it },
                     modifier = Modifier.weight(1f),
                 )
             }
-            IconButton(onClick = { refreshContent(context) }, modifier = Modifier.focusRing(CircleShape)) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Refresh content")
+            IconButton(onClick = { refreshContent() }, modifier = Modifier.focusRing(CircleShape)) {
+                Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.refresh_content))
             }
         }
 
         val q = query.trim()
         if (q.length >= 2) {
-            SearchResults(q, itemsOf(ContentType.LIVE), itemsOf(ContentType.MOVIE), itemsOf(ContentType.SERIES), libraries.size < 3, onOpen)
+            SearchResults(q, itemsOf(ContentType.LIVE), itemsOf(ContentType.MOVIE), itemsOf(ContentType.SERIES), libraries.size < 3, openFromHome)
         } else {
             HomeShelves(
                 movies = itemsOf(ContentType.MOVIE),
@@ -153,7 +153,7 @@ fun HomePage(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
     if (showSearch) {
         SearchDialog(
             initial = query,
-            hint = "Channels, movies, series",
+            hint = stringResource(R.string.home_search_hint),
             onSearch = {
                 query = it
                 showSearch = false
@@ -171,6 +171,7 @@ private fun HomeShelves(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val memory = rememberFocusMemory("home")
     var toRemove by remember { mutableStateOf<WatchEntry?>(null) }
 
     // Reading the state lists here makes the page update as soon as something is watched.
@@ -186,11 +187,10 @@ private fun HomeShelves(
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item { ExpiryBanner() }
 
-        val nothingYet = continueWatching.isEmpty() && recentChannels.isEmpty() && favorites.isEmpty()
-        if (nothingYet) {
+        if (continueWatching.isEmpty() && recentChannels.isEmpty() && favorites.isEmpty()) {
             item {
                 Text(
-                    "Things you watch and favorite will show up here, so you can get back to them in one tap.",
+                    stringResource(R.string.home_empty),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -199,11 +199,15 @@ private fun HomeShelves(
         }
 
         if (continueWatching.isNotEmpty()) {
-            shelf("Continue watching") {
+            shelf(R.string.continue_watching) {
                 items(continueWatching, key = { it.key }) { entry ->
                     ContinueCard(
                         entry,
-                        onClick = { scope.launch { Playback.resume(context, entry) } },
+                        Modifier.remembered(memory, "cw-${entry.key}"),
+                        onClick = {
+                            memory.opened("cw-${entry.key}")
+                            scope.launch { Playback.resume(context, entry) }
+                        },
                         onLongClick = { toRemove = entry },
                     )
                 }
@@ -211,41 +215,60 @@ private fun HomeShelves(
         }
 
         if (recentChannels.isNotEmpty()) {
-            shelf("Recently watched channels") {
+            shelf(R.string.recent_channels) {
                 itemsIndexed(recentChannels, key = { _, e -> e.key }) { index, entry ->
-                    ChannelTile(entry.title, entry.image) { Playback.recentChannels(context, recentChannels, index) }
+                    val asItem = StreamItem(entry.streamId, entry.title, entry.image, null, ContentType.LIVE, null, null)
+                    ChannelTile(
+                        entry.title,
+                        entry.image,
+                        Modifier.remembered(memory, "rc-${entry.key}"),
+                        onClick = {
+                            memory.opened("rc-${entry.key}")
+                            Playback.recentChannels(context, recentChannels, index)
+                        },
+                        onLongClick = { toggleFavouriteWithToast(context, asItem) },
+                    )
                 }
             }
         }
 
         if (favoriteChannels.isNotEmpty()) {
-            shelf("Favorite channels") {
+            shelf(R.string.favourite_channels) {
                 items(favoriteChannels, key = { it.id }) { item ->
-                    ChannelTile(item.name, item.icon) { onOpen(item, favoriteChannels) }
+                    ChannelTile(
+                        item.name,
+                        item.icon,
+                        Modifier.remembered(memory, "fc-${item.id}"),
+                        onClick = {
+                            memory.opened("fc-${item.id}")
+                            onOpen(item, favoriteChannels)
+                        },
+                        onLongClick = { toggleFavouriteWithToast(context, item) },
+                    )
                 }
             }
         }
 
         if (favoriteVod.isNotEmpty()) {
-            shelf("Favorite movies & series") {
+            shelf(R.string.favourite_vod) {
                 items(favoriteVod, key = { "${it.type}-${it.id}" }) { item ->
-                    PosterCard(item, Modifier.width(118.dp)) { onOpen(item, favoriteVod) }
+                    PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, favoriteVod) }
                 }
             }
         }
 
         if (newMovies.isNotEmpty()) {
-            shelf("Recently added movies") {
+            shelf(R.string.new_movies) {
                 items(newMovies) { item ->
-                    PosterCard(item, Modifier.width(118.dp)) { onOpen(item, newMovies) }
+                    PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, newMovies) }
                 }
             }
         }
 
         if (newSeries.isNotEmpty()) {
-            shelf("Recently added series") {
+            shelf(R.string.new_series) {
                 items(newSeries) { item ->
-                    PosterCard(item, Modifier.width(118.dp)) { onOpen(item, newSeries) }
+                    PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, newSeries) }
                 }
             }
         }
@@ -254,28 +277,28 @@ private fun HomeShelves(
     toRemove?.let { entry ->
         AlertDialog(
             onDismissRequest = { toRemove = null },
-            title = { Text("Remove from Continue watching?") },
+            title = { Text(stringResource(R.string.remove_continue_title)) },
             text = { Text(entry.title) },
             confirmButton = {
                 TextButton(onClick = {
                     Session.removeFromHistory(entry)
                     toRemove = null
-                }, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) { Text("Remove") }
+                }, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) { Text(stringResource(R.string.remove)) }
             },
             dismissButton = {
                 TextButton(onClick = { toRemove = null }, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.cancel))
                 }
             },
         )
     }
 }
 
-private fun LazyListScope.shelf(title: String, content: LazyListScope.() -> Unit) {
+internal fun LazyListScope.shelf(@StringRes title: Int, content: LazyListScope.() -> Unit) {
     item(key = "shelf-$title") {
         Column(Modifier.padding(top = 14.dp)) {
             Text(
-                title,
+                stringResource(title),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -291,9 +314,9 @@ private fun LazyListScope.shelf(title: String, content: LazyListScope.() -> Unit
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ContinueCard(entry: WatchEntry, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun ContinueCard(entry: WatchEntry, modifier: Modifier, onClick: () -> Unit, onLongClick: () -> Unit) {
     Column(
-        Modifier
+        modifier
             .width(210.dp)
             .focusRing(RoundedCornerShape(12.dp), focusedScale = 1.05f)
             .clip(RoundedCornerShape(12.dp))
@@ -321,7 +344,7 @@ private fun ContinueCard(entry: WatchEntry, onClick: () -> Unit, onLongClick: ()
             }
             if (entry.upNext) {
                 Text(
-                    "UP NEXT",
+                    stringResource(R.string.up_next),
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.Black,
                     modifier = Modifier
@@ -349,10 +372,12 @@ private fun ContinueCard(entry: WatchEntry, onClick: () -> Unit, onLongClick: ()
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 6.dp),
         )
-        val detail = listOfNotNull(
-            entry.subtitle,
-            if (!entry.upNext && entry.duration > 0) "${formatTime((entry.duration - entry.position).coerceAtLeast(0))} left" else null,
-        ).joinToString(" · ")
+        val remaining = if (!entry.upNext && entry.duration > 0) {
+            stringResource(R.string.time_left, formatTime((entry.duration - entry.position).coerceAtLeast(0)))
+        } else {
+            null
+        }
+        val detail = listOfNotNull(entry.subtitle, remaining).joinToString(" · ")
         if (detail.isNotEmpty()) {
             Text(
                 detail,
@@ -365,14 +390,15 @@ private fun ContinueCard(entry: WatchEntry, onClick: () -> Unit, onLongClick: ()
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChannelTile(name: String, logo: String?, onClick: () -> Unit) {
+private fun ChannelTile(name: String, logo: String?, modifier: Modifier, onClick: () -> Unit, onLongClick: () -> Unit) {
     Column(
-        Modifier
+        modifier
             .width(132.dp)
             .focusRing(RoundedCornerShape(12.dp), focusedScale = 1.05f)
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -397,14 +423,15 @@ private fun ChannelTile(name: String, logo: String?, onClick: () -> Unit) {
 @Composable
 private fun ExpiryBanner() {
     val exp = Session.auth?.expDate ?: return
+    val context = LocalContext.current
     val now = System.currentTimeMillis() / 1000
     val daysLeft = (exp - now) / 86_400
     if (daysLeft > 7) return
     val date = SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(exp * 1000))
     val text = when {
-        exp <= now -> "Your subscription expired on $date. Renew it with your provider to keep watching."
-        daysLeft < 1 -> "Your subscription ends today ($date)."
-        else -> "Your subscription ends in $daysLeft day${if (daysLeft == 1L) "" else "s"} ($date)."
+        exp <= now -> stringResource(R.string.expired, date)
+        daysLeft < 1 -> stringResource(R.string.expires_today, date)
+        else -> context.resources.getQuantityString(R.plurals.expires_in, daysLeft.toInt(), daysLeft.toInt(), date)
     }
     Card(
         colors = CardDefaults.cardColors(
@@ -432,41 +459,36 @@ private fun SearchResults(
     stillLoading: Boolean,
     onOpen: (StreamItem, List<StreamItem>) -> Unit,
 ) {
+    val memory = rememberFocusMemory("home-search")
     val foundChannels = remember(query, channels) { channels.filter { it.name.contains(query, ignoreCase = true) }.take(40) }
     val foundMovies = remember(query, movies) { movies.filter { it.name.contains(query, ignoreCase = true) }.take(40) }
     val foundSeries = remember(query, series) { series.filter { it.name.contains(query, ignoreCase = true) }.take(40) }
 
     if (foundChannels.isEmpty() && foundMovies.isEmpty() && foundSeries.isEmpty()) {
-        if (stillLoading) LoadingView("Searching…") else MessageView("Nothing found for \"$query\"")
+        if (stillLoading) LoadingView(stringResource(R.string.searching)) else MessageView(stringResource(R.string.nothing_found, query))
         return
     }
 
+    val channelsTitle = stringResource(R.string.tab_live)
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         if (foundMovies.isNotEmpty()) {
-            shelf("Movies") {
+            shelf(R.string.tab_movies) {
                 items(foundMovies) { item ->
-                    PosterCard(item, Modifier.width(118.dp)) { onOpen(item, foundMovies) }
+                    PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, foundMovies) }
                 }
             }
         }
         if (foundSeries.isNotEmpty()) {
-            shelf("Series") {
+            shelf(R.string.tab_series) {
                 items(foundSeries) { item ->
-                    PosterCard(item, Modifier.width(118.dp)) { onOpen(item, foundSeries) }
+                    PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, foundSeries) }
                 }
             }
         }
         if (foundChannels.isNotEmpty()) {
-            item(key = "channels-title") {
-                Text(
-                    "Channels",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp),
-                )
-            }
+            item(key = "channels-title") { SectionTitle(channelsTitle) }
             items(foundChannels) { item ->
-                LiveRow(item) { onOpen(item, foundChannels) }
+                LiveRow(item, memory) { onOpen(item, foundChannels) }
             }
         }
     }

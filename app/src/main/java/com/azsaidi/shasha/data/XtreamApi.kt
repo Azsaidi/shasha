@@ -14,6 +14,13 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+class NotXtreamException : IOException("Not an Xtream server")
+class WrongLoginException : IOException("Wrong username or password")
+class InvalidAddressException : IOException("Invalid server address")
+class UnexpectedResponseException : IOException("Unexpected response")
+class RefusedException(val code: Int) : IOException("HTTP $code")
+class ServerErrorException(val code: Int) : IOException("HTTP $code")
+
 object Http {
     /** Many IPTV servers reject unknown clients, so present ourselves as VLC. */
     const val USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20"
@@ -43,8 +50,8 @@ class XtreamApi(private val account: Account) {
 
     suspend fun login(): AuthInfo = withContext(Dispatchers.IO) {
         val json = fetchObject(apiUrl())
-        val info = json.optJSONObject("user_info") ?: throw IOException("This doesn't look like an Xtream server")
-        if (info.optInt("auth", 0) != 1) throw IOException("Wrong username or password")
+        val info = json.optJSONObject("user_info") ?: throw NotXtreamException()
+        if (info.optInt("auth", 0) != 1) throw WrongLoginException()
         val formats = info.optJSONArray("allowed_output_formats")
             ?.let { arr -> (0 until arr.length()).map { arr.optString(it).lowercase() } }
             .orEmpty()
@@ -73,13 +80,13 @@ class XtreamApi(private val account: Account) {
         out
     }
 
-    suspend fun streams(type: ContentType): List<StreamItem> = withContext(Dispatchers.IO) {
+    suspend fun streams(type: ContentType, onProgress: ((Long) -> Unit)? = null): List<StreamItem> = withContext(Dispatchers.IO) {
         val action = when (type) {
             ContentType.LIVE -> "get_live_streams"
             ContentType.MOVIE -> "get_vod_streams"
             ContentType.SERIES -> "get_series"
         }
-        val arr = fetchArray(apiUrl(action))
+        val arr = fetchArray(apiUrl(action), onProgress)
         val out = ArrayList<StreamItem>(arr.length())
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
@@ -211,7 +218,7 @@ class XtreamApi(private val account: Account) {
     }
 
     private fun apiUrl(action: String? = null, extra: Map<String, String> = emptyMap()): HttpUrl {
-        val root = "$base/player_api.php".toHttpUrlOrNull() ?: throw IOException("Invalid server address")
+        val root = "$base/player_api.php".toHttpUrlOrNull() ?: throw InvalidAddressException()
         val builder = root.newBuilder()
             .addQueryParameter("username", account.username)
             .addQueryParameter("password", account.password)
@@ -220,22 +227,40 @@ class XtreamApi(private val account: Account) {
         return builder.build()
     }
 
-    private fun fetch(url: HttpUrl): String {
+    private fun fetch(url: HttpUrl, onProgress: ((Long) -> Unit)? = null): String {
         val request = Request.Builder().url(url).build()
         Http.client.newCall(request).execute().use { response ->
-            if (response.code == 401 || response.code == 403) {
-                throw IOException("The server refused access (HTTP ${response.code}). Check your username and password, or your subscription.")
+            if (response.code == 401 || response.code == 403) throw RefusedException(response.code)
+            if (!response.isSuccessful) throw ServerErrorException(response.code)
+            val body = response.body ?: return ""
+            if (onProgress == null) return body.string().trim()
+            // Read in chunks so the UI can show how much has been downloaded.
+            val out = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(64 * 1024)
+            var total = 0L
+            var reported = 0L
+            body.byteStream().use { input ->
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    out.write(buffer, 0, n)
+                    total += n
+                    if (total - reported >= 256 * 1024) {
+                        reported = total
+                        onProgress(total)
+                    }
+                }
             }
-            if (!response.isSuccessful) throw IOException("Server error (HTTP ${response.code})")
-            return response.body?.string().orEmpty().trim()
+            onProgress(total)
+            return out.toString("UTF-8").trim()
         }
     }
 
-    private fun fetchArray(url: HttpUrl): JSONArray =
-        try { JSONArray(fetch(url)) } catch (e: JSONException) { JSONArray() }
+    private fun fetchArray(url: HttpUrl, onProgress: ((Long) -> Unit)? = null): JSONArray =
+        try { JSONArray(fetch(url, onProgress)) } catch (e: JSONException) { JSONArray() }
 
     private fun fetchObject(url: HttpUrl): JSONObject =
-        try { JSONObject(fetch(url)) } catch (e: JSONException) { throw IOException("Unexpected response from the server") }
+        try { JSONObject(fetch(url)) } catch (e: JSONException) { throw UnexpectedResponseException() }
 
     companion object {
         /** Turns "example.com:8080/", "http://example.com:8080/get.php?..." etc. into "http://example.com:8080". */

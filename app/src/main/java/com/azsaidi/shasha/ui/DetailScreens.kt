@@ -54,7 +54,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import android.content.Context
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.azsaidi.shasha.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -78,7 +81,7 @@ private fun DetailScaffold(title: String, onBack: () -> Unit, content: @Composab
                 title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.focusRing(CircleShape)) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
             )
@@ -98,7 +101,7 @@ private fun FavoriteButton(item: StreamItem?) {
             tint = if (favorite) FavoritePink else MaterialTheme.colorScheme.primary,
         )
         Spacer(Modifier.width(8.dp))
-        Text(if (favorite) "In favorites" else "Add to favorites")
+        Text(stringResource(if (favorite) R.string.in_favourites else R.string.add_favourite))
     }
 }
 
@@ -125,10 +128,10 @@ private fun ExpandableText(text: String) {
 }
 
 @Composable
-private fun PlayButton(label: String, focus: FocusRequester, onClick: () -> Unit) {
+private fun PlayButton(label: String, focus: FocusRequester, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Button(
         onClick = onClick,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(50.dp)
             .focusRequester(focus)
@@ -147,6 +150,7 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
     var info by remember { mutableStateOf<VodInfo?>(null) }
     val isTv = rememberIsTv()
     val playFocus = remember { FocusRequester() }
+    val memory = rememberFocusMemory("movie-$id")
 
     LaunchedEffect(id) {
         info = try {
@@ -157,15 +161,16 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
             null
         }
     }
-    if (isTv) LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
+    if (isTv) LaunchedEffect(Unit) { if (!FocusMemory.hasPending()) runCatching { playFocus.requestFocus() } }
 
     // Reads the history state list, so this updates when you come back from the player.
     val entry = Session.historyEntry(WatchKind.MOVIE, id)
     val resumeAt = entry?.takeIf { !it.finished && it.position > 10_000 }?.position ?: 0L
-    val title = item?.name ?: info?.name ?: "Movie"
+    val title = item?.name ?: info?.name ?: stringResource(R.string.movie)
     val image = info?.cover ?: item?.icon
 
     fun play(fromStart: Boolean) {
+        memory.opened("play")
         Playback.movie(context, id, title, item?.icon ?: image, info?.extension ?: item?.extension, fromStart)
     }
 
@@ -199,13 +204,17 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Watched", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                            Text(stringResource(R.string.watched), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
                         }
                     }
                 }
             }
 
-            PlayButton(if (resumeAt > 0) "Resume from ${formatTime(resumeAt)}" else "Play", playFocus) { play(fromStart = false) }
+            PlayButton(
+                if (resumeAt > 0) stringResource(R.string.resume_from, formatTime(resumeAt)) else stringResource(R.string.play),
+                playFocus,
+                Modifier.remembered(memory, "play"),
+            ) { play(fromStart = false) }
             if (resumeAt > 0 && entry != null && entry.duration > 0) {
                 LinearProgressIndicator(
                     progress = { entry.progress },
@@ -217,17 +226,17 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
             }
             if (resumeAt > 0) {
                 TextButton(onClick = { play(fromStart = true) }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
-                    Text("Start from the beginning")
+                    Text(stringResource(R.string.start_over))
                 }
             }
             FavoriteButton(item)
 
             info?.plot?.let { ExpandableText(it) }
             info?.director?.let {
-                Text("Director: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.director, it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             info?.cast?.let {
-                Text("Cast: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.cast, it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -236,9 +245,10 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
 /** What the big button on a series page should do. */
 private data class SeriesAction(val label: String, val season: Int, val index: Int, val fromStart: Boolean)
 
-private fun seriesAction(info: SeriesInfo, latest: WatchEntry?): SeriesAction? {
+private fun seriesAction(context: Context, info: SeriesInfo, latest: WatchEntry?): SeriesAction? {
     val seasons = info.seasons.filterValues { it.isNotEmpty() }
     val first = seasons.entries.firstOrNull() ?: return null
+    fun code(ep: Episode) = context.getString(R.string.episode_code, ep.season, ep.number)
     if (latest != null) {
         for ((season, episodes) in seasons) {
             val index = episodes.indexOfFirst { it.id == latest.streamId }
@@ -246,28 +256,26 @@ private fun seriesAction(info: SeriesInfo, latest: WatchEntry?): SeriesAction? {
             val ep = episodes[index]
             if (!latest.finished) {
                 val label = if (latest.position > 10_000) {
-                    "Resume S${ep.season} E${ep.number} · ${formatTime(latest.position)}"
+                    context.getString(R.string.resume_ep, code(ep), formatTime(latest.position))
                 } else {
-                    "Play S${ep.season} E${ep.number}"
+                    context.getString(R.string.play_ep, code(ep))
                 }
                 return SeriesAction(label, season, index, fromStart = false)
             }
             // Finished: move on to the next episode, crossing into the next season if needed.
             if (index + 1 < episodes.size) {
-                val next = episodes[index + 1]
-                return SeriesAction("Play next: S${next.season} E${next.number}", season, index + 1, fromStart = true)
+                return SeriesAction(context.getString(R.string.play_next_ep, code(episodes[index + 1])), season, index + 1, fromStart = true)
             }
             val keys = seasons.keys.toList()
             val nextSeason = keys.getOrNull(keys.indexOf(season) + 1)
             if (nextSeason != null) {
                 val next = seasons.getValue(nextSeason).first()
-                return SeriesAction("Play next: S${next.season} E${next.number}", nextSeason, 0, fromStart = true)
+                return SeriesAction(context.getString(R.string.play_next_ep, code(next)), nextSeason, 0, fromStart = true)
             }
-            return SeriesAction("Watch again from S${first.value[0].season} E${first.value[0].number}", first.key, 0, fromStart = true)
+            return SeriesAction(context.getString(R.string.watch_again, code(first.value[0])), first.key, 0, fromStart = true)
         }
     }
-    val ep = first.value[0]
-    return SeriesAction("Play S${ep.season} E${ep.number}", first.key, 0, fromStart = true)
+    return SeriesAction(context.getString(R.string.play_ep, code(first.value[0])), first.key, 0, fromStart = true)
 }
 
 @Composable
@@ -279,6 +287,7 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
     var selectedSeason by rememberSaveable { mutableIntStateOf(-1) }
     val isTv = rememberIsTv()
     val playFocus = remember { FocusRequester() }
+    val memory = rememberFocusMemory("series-$id")
 
     LaunchedEffect(id, retry) {
         state = Load.Loading
@@ -287,23 +296,23 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Load.Failed(friendlyError(e))
+            Load.Failed(friendlyError(context, e))
         }
     }
 
-    val title = item?.name ?: (state as? Load.Ready<SeriesInfo>)?.value?.name ?: "Series"
+    val title = item?.name ?: (state as? Load.Ready<SeriesInfo>)?.value?.name ?: stringResource(R.string.tab_series)
 
     DetailScaffold(title, onBack) { padding ->
         when (val s = state) {
-            is Load.Loading -> Column(Modifier.padding(padding)) { LoadingView("Loading episodes…") }
+            is Load.Loading -> Column(Modifier.padding(padding)) { LoadingView(stringResource(R.string.loading_episodes)) }
             is Load.Failed -> Column(Modifier.padding(padding)) {
-                MessageView("Couldn't load this series", s.message, "Try again") { retry++ }
+                MessageView(stringResource(R.string.couldnt_load_series), s.message, stringResource(R.string.try_again)) { retry++ }
             }
             is Load.Ready -> {
                 val info = s.value
                 val cover = info.cover ?: item?.icon
                 val latest = Session.latestEpisode(id)
-                val action = seriesAction(info, latest)
+                val action = seriesAction(context, info, latest)
                 val seasons = info.seasons.keys.toList()
                 val season = when {
                     selectedSeason in seasons -> selectedSeason
@@ -318,21 +327,24 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                     Playback.episodes(context, id, title, cover, list, index, fromStart)
                 }
 
-                if (isTv) LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
+                if (isTv) LaunchedEffect(Unit) { if (!FocusMemory.hasPending()) runCatching { playFocus.requestFocus() } }
 
                 LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(bottom = 24.dp)) {
                     item {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             SeriesHeader(item, info, title)
                             if (action != null) {
-                                PlayButton(action.label, playFocus) { playSeason(action.season, action.index, action.fromStart) }
+                                PlayButton(action.label, playFocus, Modifier.remembered(memory, "play")) {
+                                    memory.opened("play")
+                                    playSeason(action.season, action.index, action.fromStart)
+                                }
                             }
                             FavoriteButton(item)
                             info.plot?.let { ExpandableText(it) }
                         }
                     }
                     if (seasons.isEmpty()) {
-                        item { MessageView("No episodes yet") }
+                        item { MessageView(stringResource(R.string.no_episodes)) }
                     } else {
                         if (seasons.size > 1) {
                             item {
@@ -344,7 +356,7 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                                         FilterChip(
                                             selected = number == season,
                                             onClick = { selectedSeason = number },
-                                            label = { Text("Season $number") },
+                                            label = { Text(stringResource(R.string.season_n, number)) },
                                             modifier = Modifier.focusRing(RoundedCornerShape(8.dp)),
                                         )
                                     }
@@ -353,7 +365,7 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                         } else {
                             item {
                                 Text(
-                                    "Season $season",
+                                    stringResource(R.string.season_n, season),
                                     style = MaterialTheme.typography.titleSmall,
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -362,7 +374,10 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                         }
                         itemsIndexed(episodes) { index, episode ->
                             val watch = Session.historyEntry(WatchKind.EPISODE, episode.id)
-                            EpisodeRow(episode, cover, watch) { playSeason(season, index, fromStart = false) }
+                            EpisodeRow(episode, cover, watch, Modifier.remembered(memory, "ep-${episode.id}")) {
+                                memory.opened("ep-${episode.id}")
+                                playSeason(season, index, fromStart = false)
+                            }
                         }
                     }
                 }
@@ -389,7 +404,7 @@ private fun SeriesHeader(item: StreamItem?, info: SeriesInfo, title: String) {
             MetaText(
                 listOf(
                     info.releaseDate?.take(4),
-                    "${info.seasons.size} season${if (info.seasons.size == 1) "" else "s"}",
+                    LocalContext.current.resources.getQuantityString(R.plurals.seasons, info.seasons.size, info.seasons.size),
                     (info.rating ?: item?.rating)?.let { "★ $it" },
                 )
             )
@@ -401,7 +416,7 @@ private fun SeriesHeader(item: StreamItem?, info: SeriesInfo, title: String) {
 }
 
 @Composable
-private fun EpisodeRow(episode: Episode, fallbackImage: String?, watch: WatchEntry?, onClick: () -> Unit) {
+private fun EpisodeRow(episode: Episode, fallbackImage: String?, watch: WatchEntry?, modifier: Modifier, onClick: () -> Unit) {
     ListItem(
         headlineContent = {
             Text("${episode.number}. ${episode.title}", maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -411,8 +426,8 @@ private fun EpisodeRow(episode: Episode, fallbackImage: String?, watch: WatchEnt
                 episode.duration,
                 when {
                     watch == null -> null
-                    watch.finished -> "Watched"
-                    watch.position > 10_000 -> "Stopped at ${formatTime(watch.position)}"
+                    watch.finished -> stringResource(R.string.watched)
+                    watch.position > 10_000 -> stringResource(R.string.stopped_at, formatTime(watch.position))
                     else -> null
                 },
                 episode.plot,
@@ -439,7 +454,7 @@ private fun EpisodeRow(episode: Episode, fallbackImage: String?, watch: WatchEnt
                 if (watch?.finished == true) {
                     Icon(
                         Icons.Filled.CheckCircle,
-                        contentDescription = "Watched",
+                        contentDescription = stringResource(R.string.watched),
                         tint = MaterialTheme.colorScheme.secondary,
                         modifier = Modifier
                             .align(Alignment.TopEnd)
@@ -449,7 +464,7 @@ private fun EpisodeRow(episode: Episode, fallbackImage: String?, watch: WatchEnt
                 }
             }
         },
-        modifier = Modifier
+        modifier = modifier
             .focusRing(RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick),

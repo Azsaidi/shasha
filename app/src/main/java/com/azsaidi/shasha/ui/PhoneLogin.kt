@@ -1,6 +1,11 @@
 package com.azsaidi.shasha.ui
 
+import android.content.Context
 import android.graphics.Bitmap
+import android.view.View
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.azsaidi.shasha.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -52,17 +57,18 @@ import kotlin.concurrent.thread
  */
 @Composable
 fun PhoneLoginPanel(onLoggedIn: (Account, AuthInfo) -> Unit, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     val latestOnLoggedIn by rememberUpdatedState(onLoggedIn)
     var address by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(Unit) {
-        val server = PhoneLoginServer { form ->
-            withContext(Dispatchers.Main) { status = "Signing in…" }
-            when (val result = performLogin(form.name, form.username, form.password, form.server)) {
+        val server = PhoneLoginServer(context) { form ->
+            withContext(Dispatchers.Main) { status = context.getString(R.string.phone_signing_in) }
+            when (val result = performLogin(context, form.name, form.username, form.password, form.server)) {
                 is LoginResult.Success -> {
                     withContext(Dispatchers.Main) {
-                        status = "Signed in"
+                        status = context.getString(R.string.phone_signed_in)
                         latestOnLoggedIn(result.account, result.auth)
                     }
                     null
@@ -83,9 +89,9 @@ fun PhoneLoginPanel(onLoggedIn: (Account, AuthInfo) -> Unit, modifier: Modifier 
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("Sign in with your phone", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text(stringResource(R.string.phone_title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         Text(
-            "Scan the code with your phone's camera and type your details there. Your phone must be on the same Wi-Fi as this TV.",
+            stringResource(R.string.phone_desc),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -94,7 +100,7 @@ fun PhoneLoginPanel(onLoggedIn: (Account, AuthInfo) -> Unit, modifier: Modifier 
         val url = address
         if (url == null) {
             Text(
-                "This TV isn't connected to a local network, so phone sign-in isn't available. Use the form instead.",
+                stringResource(R.string.phone_unavailable),
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
@@ -105,10 +111,10 @@ fun PhoneLoginPanel(onLoggedIn: (Account, AuthInfo) -> Unit, modifier: Modifier 
                     .background(Color.White, RoundedCornerShape(16.dp))
                     .padding(12.dp)
             ) {
-                Image(bitmap = qr, contentDescription = "QR code to sign in from your phone", modifier = Modifier.size(220.dp))
+                Image(bitmap = qr, contentDescription = stringResource(R.string.qr_description), modifier = Modifier.size(220.dp))
             }
             Text(
-                "Or open  ${url.substringAfter("http://")}",
+                stringResource(R.string.phone_or_open, url.substringAfter("http://")),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 14.dp),
@@ -146,7 +152,10 @@ private fun localIpAddress(): String? = runCatching {
 data class LoginForm(val name: String, val username: String, val password: String, val server: String)
 
 /** Minimal HTTP server for the phone sign-in page. [onSubmit] returns an error message, or null on success. */
-private class PhoneLoginServer(private val onSubmit: suspend (LoginForm) -> String?) {
+private class PhoneLoginServer(
+    private val context: Context,
+    private val onSubmit: suspend (LoginForm) -> String?,
+) {
     val token: String = buildString {
         val alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
         val random = SecureRandom()
@@ -215,7 +224,7 @@ private class PhoneLoginServer(private val onSubmit: suspend (LoginForm) -> Stri
             }
 
             if (path != "/$token") {
-                respond("404 Not Found", page("Link expired", "<p>Scan the QR code on your TV again.</p>"))
+                respond("404 Not Found", page(str(R.string.web_expired_title), "<p>${esc(str(R.string.web_expired))}</p>"))
                 return
             }
             if (method == "POST") {
@@ -238,8 +247,8 @@ private class PhoneLoginServer(private val onSubmit: suspend (LoginForm) -> Stri
                     respond(
                         "200 OK",
                         page(
-                            "Signed in",
-                            "<div class=ok>&#10003;</div><p class=center>Your TV is signed in. You can put your phone away.</p>",
+                            str(R.string.phone_signed_in),
+                            "<div class=ok>&#10003;</div><p class=center>${esc(str(R.string.web_done))}</p>",
                         ),
                     )
                 } else {
@@ -274,24 +283,29 @@ private class PhoneLoginServer(private val onSubmit: suspend (LoginForm) -> Stri
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         .replace("\"", "&quot;").replace("'", "&#39;")
 
+    private fun str(id: Int): String = context.getString(id)
+
     private fun formPage(form: LoginForm, error: String?): String = page(
-        "Sign in to Shasha",
+        str(R.string.web_title),
         """
-        <p class=muted>Enter the Xtream Codes details from your IPTV provider. Your TV will sign in as soon as you tap the button.</p>
+        <p class=muted>${esc(str(R.string.web_intro))}</p>
         ${if (error != null) "<p class=error>${esc(error)}</p>" else ""}
         <form method=post>
-          <label>Playlist name<input name=name value="${esc(form.name)}" placeholder="My IPTV"></label>
-          <label>Username<input name=username value="${esc(form.username)}" autocapitalize=off autocorrect=off required></label>
-          <label>Password<input name=password type=password value="${esc(form.password)}" required></label>
-          <label>URL, domain or server<input name=server type=url inputmode=url value="${esc(form.server)}" placeholder="http://example.com:8080" autocapitalize=off autocorrect=off required></label>
-          <button type=submit>Sign in on TV</button>
+          <label>${esc(str(R.string.playlist_name))}<input name=name value="${esc(form.name)}"></label>
+          <label>${esc(str(R.string.username))}<input name=username dir=ltr value="${esc(form.username)}" autocapitalize=off autocorrect=off required></label>
+          <label>${esc(str(R.string.password))}<input name=password dir=ltr type=password value="${esc(form.password)}" required></label>
+          <label>${esc(str(R.string.server_field))}<input name=server dir=ltr type=url inputmode=url value="${esc(form.server)}" placeholder="http://example.com:8080" autocapitalize=off autocorrect=off required></label>
+          <button type=submit>${esc(str(R.string.web_button))}</button>
         </form>
-        <p class=muted small>You can also paste a full M3U link into the server field.</p>
+        <p class="muted small">${esc(str(R.string.login_tip))}</p>
         """.trimIndent(),
     )
 
+    private val direction: String
+        get() = if (context.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL) "rtl" else "ltr"
+
     private fun page(title: String, body: String) = """
-        <!doctype html><html><head><meta charset=utf-8>
+        <!doctype html><html dir="$direction"><head><meta charset=utf-8>
         <meta name=viewport content="width=device-width,initial-scale=1">
         <title>${esc(title)}</title>
         <style>

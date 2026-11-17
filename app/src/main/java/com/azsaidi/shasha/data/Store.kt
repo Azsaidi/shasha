@@ -80,6 +80,17 @@ object Store {
         prefs.edit().putString("fav:$accountId", arr.toString()).apply()
     }
 
+    fun searches(): List<String> = runCatching {
+        val arr = JSONArray(prefs.getString("searches", null) ?: "[]")
+        (0 until arr.length()).map { arr.getString(it) }
+    }.getOrDefault(emptyList())
+
+    fun saveSearches(list: List<String>) {
+        val arr = JSONArray()
+        list.forEach { arr.put(it) }
+        prefs.edit().putString("searches", arr.toString()).apply()
+    }
+
     fun history(accountId: String): List<WatchEntry> = runCatching {
         val arr = JSONArray(prefs.getString("history:$accountId", null) ?: "[]")
         (0 until arr.length()).mapNotNull { WatchEntry.fromJson(arr.getJSONObject(it)) }

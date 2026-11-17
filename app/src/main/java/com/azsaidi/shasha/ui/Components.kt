@@ -25,7 +25,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import android.content.Context
 import coil.compose.AsyncImage
+import com.azsaidi.shasha.R
+import com.azsaidi.shasha.data.RefusedException
+import com.azsaidi.shasha.data.InvalidAddressException
+import com.azsaidi.shasha.data.NotXtreamException
+import com.azsaidi.shasha.data.ServerErrorException
+import com.azsaidi.shasha.data.UnexpectedResponseException
+import com.azsaidi.shasha.data.WrongLoginException
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -77,7 +85,7 @@ fun Thumb(
 }
 
 @Composable
-fun LoadingView(message: String) {
+fun LoadingView(message: String, detail: String? = null) {
     Column(
         Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
@@ -86,6 +94,10 @@ fun LoadingView(message: String) {
         CircularProgressIndicator()
         Spacer(Modifier.height(16.dp))
         Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (detail != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -115,14 +127,23 @@ fun MessageView(title: String, message: String? = null, action: String? = null, 
     }
 }
 
-fun friendlyError(e: Throwable): String = when (e) {
-    is UnknownHostException -> "Can't find that server. Check the address and your internet connection."
-    is SocketTimeoutException -> "The server took too long to respond. Try again."
-    is ConnectException -> "Couldn't connect to the server. Check the address and port."
-    is SSLException -> "Secure connection failed. Try the address with http:// instead of https://."
-    is IOException -> e.message ?: "Network error"
-    else -> e.message ?: "Something went wrong"
+fun friendlyError(context: Context, e: Throwable): String = when (e) {
+    is UnknownHostException -> context.getString(R.string.err_unknown_host)
+    is SocketTimeoutException -> context.getString(R.string.err_timeout)
+    is ConnectException -> context.getString(R.string.err_connect)
+    is SSLException -> context.getString(R.string.err_ssl)
+    is WrongLoginException -> context.getString(R.string.err_wrong_login)
+    is NotXtreamException -> context.getString(R.string.err_not_xtream)
+    is InvalidAddressException -> context.getString(R.string.err_invalid_address)
+    is UnexpectedResponseException -> context.getString(R.string.err_unexpected)
+    is RefusedException -> context.getString(R.string.err_denied, e.code)
+    is ServerErrorException -> context.getString(R.string.err_server_code, e.code)
+    is IOException -> context.getString(R.string.err_network)
+    else -> context.getString(R.string.err_generic)
 }
+
+/** "12.4" for a byte count, for "x MB downloaded". */
+fun megabytes(bytes: Long): String = String.format(Locale.US, "%.1f", bytes / 1_048_576.0)
 
 fun formatTime(ms: Long): String {
     val total = ms / 1000

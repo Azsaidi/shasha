@@ -5,14 +5,28 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateMapOf
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Progress of a full refresh, for the progress bar. */
+data class RefreshState(
+    val step: Int,
+    val total: Int,
+    val type: ContentType,
+    val done: Boolean = false,
+    val error: Throwable? = null,
+)
 
 /** The account currently open, its catalogue (memory + disk cache), favorites and watch history. */
 object Session {
@@ -36,6 +50,15 @@ object Session {
     val favorites = mutableStateListOf<StreamItem>()
     val history = mutableStateListOf<WatchEntry>()
 
+    /** Bytes downloaded so far for each list being fetched. */
+    val downloadBytes = mutableStateMapOf<ContentType, Long>()
+    var refresh by mutableStateOf<RefreshState?>(null)
+        private set
+    private var refreshJob: Job? = null
+
+    /** Recent searches, newest first (shared by all accounts). */
+    val searches = mutableStateListOf<String>().apply { addAll(Store.searches()) }
+
     private val categories = HashMap<ContentType, List<Category>>()
     private val streams = HashMap<ContentType, List<StreamItem>>()
     private val loading = HashMap<ContentType, Deferred<Library>>()
@@ -49,12 +72,29 @@ object Session {
         streams.clear()
         loading.clear()
         cacheVersion++
+        downloadBytes.clear()
         favorites.clear()
         favorites.addAll(Store.favorites(acc.id))
         history.clear()
         history.addAll(Store.history(acc.id))
         Store.lastAccountId = acc.id
         if (knownAuth == null) refreshAuth()
+    }
+
+    /** After editing an account: keep favourites and history, reload lists only if the login changed. */
+    fun accountEdited(updated: Account, newAuth: AuthInfo) {
+        if (account?.id != updated.id) return
+        val old = account
+        account = updated
+        api = XtreamApi(updated)
+        auth = newAuth
+        if (old == null || old.server != updated.server || old.username != updated.username || old.password != updated.password) {
+            categories.clear()
+            streams.clear()
+            loading.clear()
+            CatalogCache.clear(updated.id)
+            cacheVersion++
+        }
     }
 
     fun close() {
@@ -92,7 +132,7 @@ object Session {
         cached(type)?.let { return it }
         val acc = account ?: error("No account is open")
         val running = loading[type]
-        if (running != null && running.isActive) return running.await()
+        if (running != null && !running.isCompleted) return running.await()
         val job = scope.async { loadFromDiskOrNetwork(acc, type) }
         loading[type] = job
         return job.await()
@@ -117,9 +157,12 @@ object Session {
     }
 
     private suspend fun download(acc: Account, client: XtreamApi, type: ContentType): Library {
+        downloadBytes[type] = 0L
         val library = coroutineScope {
             val c = async { client.categories(type) }
-            val s = async { client.streams(type) }
+            val s = async {
+                client.streams(type) { bytes -> scope.launch { downloadBytes[type] = bytes } }
+            }
             c.await() to s.await()
         }
         if (account?.id == acc.id) remember(type, library)
@@ -132,20 +175,62 @@ object Session {
         streams[type] = library.second
     }
 
-    /** Throws away everything cached and downloads fresh lists. */
+    /** Throws away everything cached and downloads fresh lists, one after another, with progress. */
     fun refreshAll() {
         val acc = account ?: return
+        val client = api ?: return
+        if (refreshJob?.isActive == true) return
         categories.clear()
         streams.clear()
         loading.clear()
         CatalogCache.clear(acc.id)
+        val types = listOf(ContentType.LIVE, ContentType.MOVIE, ContentType.SERIES)
+        // Lazy jobs: screens waiting on a list share the same download instead of starting another.
+        val jobs = types.associateWith { type -> scope.async(start = CoroutineStart.LAZY) { download(acc, client, type) } }
+        loading.putAll(jobs)
         cacheVersion++
         refreshAuth()
+        refreshJob = scope.launch {
+            var error: Throwable? = null
+            types.forEachIndexed { index, type ->
+                if (account?.id != acc.id) {
+                    refresh = null
+                    return@launch
+                }
+                refresh = RefreshState(index + 1, types.size, type)
+                try {
+                    jobs.getValue(type).await()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    error = e
+                }
+            }
+            refresh = RefreshState(types.size, types.size, types.last(), done = true, error = error)
+            delay(3_000)
+            refresh = null
+        }
     }
 
     fun findItem(type: ContentType, id: String): StreamItem? =
         streams[type]?.firstOrNull { it.id == id }
             ?: favorites.firstOrNull { it.type == type && it.id == id }
+
+    // ---------------------------------------------------------------- searches
+
+    fun rememberSearch(query: String) {
+        val q = query.trim()
+        if (q.length < 2) return
+        searches.removeAll { it.equals(q, ignoreCase = true) }
+        searches.add(0, q)
+        while (searches.size > 10) searches.removeAt(searches.lastIndex)
+        Store.saveSearches(searches.toList())
+    }
+
+    fun clearSearches() {
+        searches.clear()
+        Store.saveSearches(emptyList())
+    }
 
     // ---------------------------------------------------------------- adult filter
 

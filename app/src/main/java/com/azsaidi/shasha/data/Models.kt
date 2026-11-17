@@ -1,5 +1,7 @@
 package com.azsaidi.shasha.data
 
+import androidx.annotation.StringRes
+import com.azsaidi.shasha.R
 import org.json.JSONObject
 
 data class Account(
@@ -10,10 +12,10 @@ data class Account(
     val password: String,
 )
 
-enum class ContentType(val title: String, val noun: String) {
-    LIVE("Live TV", "channels"),
-    MOVIE("Movies", "movies"),
-    SERIES("Series", "series"),
+enum class ContentType(@StringRes val titleRes: Int, @StringRes val nounRes: Int) {
+    LIVE(R.string.tab_live, R.string.noun_channels),
+    MOVIE(R.string.tab_movies, R.string.noun_movies),
+    SERIES(R.string.tab_series, R.string.noun_series),
 }
 
 data class Category(val id: String, val name: String)

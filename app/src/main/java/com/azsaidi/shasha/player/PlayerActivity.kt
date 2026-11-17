@@ -28,7 +28,11 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ProgressBar
 import android.widget.Toast
+import androidx.media3.ui.DefaultTimeBar
+import com.azsaidi.shasha.data.Language
+import kotlin.math.ceil
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.annotation.OptIn
@@ -77,6 +81,17 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var infoView: TextView
     private lateinit var resizeView: TextView
     private lateinit var sleepView: TextView
+    private lateinit var curtain: View
+    private lateinit var titleCard: LinearLayout
+    private lateinit var titleCardText: TextView
+    private lateinit var upNextCard: LinearLayout
+    private lateinit var upNextTitle: TextView
+    private lateinit var upNextCountdown: TextView
+    private lateinit var upNextProgress: ProgressBar
+    private lateinit var upNextPlay: TextView
+    private var timeBar: DefaultTimeBar? = null
+    private var upNextShownFor = -1
+    private var upNextCancelledFor = -1
 
     private var items: List<PlayItem> = emptyList()
     private var startIndex = 0
@@ -93,18 +108,20 @@ class PlayerActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var epgJob: Job? = null
 
-    private val resizeModes = listOf(
-        AspectRatioFrameLayout.RESIZE_MODE_FIT to "Fit",
-        AspectRatioFrameLayout.RESIZE_MODE_ZOOM to "Fill",
-        AspectRatioFrameLayout.RESIZE_MODE_FILL to "Stretch",
-    )
+    private val resizeModes by lazy {
+        listOf(
+            AspectRatioFrameLayout.RESIZE_MODE_FIT to getString(R.string.fit),
+            AspectRatioFrameLayout.RESIZE_MODE_ZOOM to getString(R.string.fill),
+            AspectRatioFrameLayout.RESIZE_MODE_FILL to getString(R.string.stretch),
+        )
+    }
     private var resizeIndex = 0
 
     private val sleepOptions = listOf(0, 15, 30, 60, 90, 120)
     private var sleepIndex = 0
     private val sleepRunnable = Runnable {
         player?.pause()
-        Toast.makeText(this, "Sleep timer: playback stopped", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(R.string.sleep_done), Toast.LENGTH_SHORT).show()
         finish()
     }
 
@@ -113,6 +130,14 @@ class PlayerActivity : ComponentActivity() {
             track()
             if (++ticks % 5 == 0 && player?.isPlaying == true) saveCurrent()
             handler.postDelayed(this, 2_000)
+        }
+    }
+
+    /** Checks four times a second whether to show the "next episode" countdown. */
+    private val upNextTicker = object : Runnable {
+        override fun run() {
+            updateUpNext()
+            handler.postDelayed(this, 250)
         }
     }
 
@@ -128,6 +153,12 @@ class PlayerActivity : ComponentActivity() {
             trackedIndex = index
             lastPosition = 0
             lastDuration = 0
+            hideUpNext()
+            upNextCancelledFor = -1
+            p.pauseAtEndOfMediaItems = false
+            if (previous >= 0 && previous != index && items.getOrNull(index)?.kind == WatchKind.EPISODE) {
+                announceEpisode(index)
+            }
             onItemStarted(index)
             updatePipParams()
         }
@@ -167,6 +198,10 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(Language.wrap(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         items = PlayerQueue.items
@@ -199,6 +234,8 @@ class PlayerActivity : ComponentActivity() {
             if (inPip) {
                 playerView.hideController()
                 topBar.visibility = View.GONE
+                hideUpNext()
+                titleCard.visibility = View.GONE
             }
         }
 
@@ -231,6 +268,8 @@ class PlayerActivity : ComponentActivity() {
         initializePlayer()
         handler.removeCallbacks(ticker)
         handler.postDelayed(ticker, 2_000)
+        handler.removeCallbacks(upNextTicker)
+        handler.postDelayed(upNextTicker, 250)
     }
 
     override fun onResume() {
@@ -241,6 +280,7 @@ class PlayerActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         handler.removeCallbacks(ticker)
+        handler.removeCallbacks(upNextTicker)
         releasePlayer()
         // The PiP window was closed: don't leave an invisible player behind.
         if (inPip) finish()
@@ -258,17 +298,40 @@ class PlayerActivity : ComponentActivity() {
             val controlsShown = playerView.isControllerFullyVisible
             val live = items.getOrNull(p.currentMediaItemIndex)?.isLive == true
             val zappable = live && items.size > 1
+            val bar = timeBar
+            val horizontal = event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT || event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+            if (horizontal && !live && bar != null) {
+                // Seeking with the remote: small steps for single presses, bigger the longer it's held.
+                // The time bar previews the position and only seeks once you stop, so it stays smooth.
+                bar.setKeyTimeIncrement(seekStep(event.repeatCount, p.duration))
+                if (bar.hasFocus()) return super.dispatchKeyEvent(event)
+                if (!controlsShown && upNextCard.visibility != View.VISIBLE) {
+                    playerView.showController()
+                    bar.requestFocus()
+                    return bar.onKeyDown(event.keyCode, event)
+                }
+            }
             when (event.keyCode) {
                 KeyEvent.KEYCODE_CHANNEL_UP -> if (zappable) { changeItem(+1); return true }
                 KeyEvent.KEYCODE_CHANNEL_DOWN -> if (zappable) { changeItem(-1); return true }
                 // With the controls hidden: up/down changes channel, left/right skips 10 s.
                 KeyEvent.KEYCODE_DPAD_UP -> if (!controlsShown && zappable) { changeItem(+1); return true }
                 KeyEvent.KEYCODE_DPAD_DOWN -> if (!controlsShown && zappable) { changeItem(-1); return true }
-                KeyEvent.KEYCODE_DPAD_LEFT -> if (!controlsShown && !live) { p.seekBack(); playerView.showController(); return true }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> if (!controlsShown && !live) { p.seekForward(); playerView.showController(); return true }
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    /** 10 s per tap; holding the button speeds up to 30 s, 1 min and then 3 min steps. */
+    private fun seekStep(repeatCount: Int, duration: Long): Long {
+        val step = when {
+            repeatCount < 4 -> 10_000L
+            repeatCount < 12 -> 30_000L
+            repeatCount < 24 -> 60_000L
+            else -> 180_000L
+        }
+        // Keep short videos controllable.
+        return if (duration > 0) step.coerceAtMost(maxOf(5_000L, duration / 30)) else step
     }
 
     // ------------------------------------------------------------------ views
@@ -293,7 +356,7 @@ class PlayerActivity : ComponentActivity() {
             setImageResource(R.drawable.ic_back)
             background = buttonBackground(0x00FFFFFF, dp(22).toFloat())
             isFocusable = true
-            contentDescription = "Back"
+            contentDescription = getString(R.string.back)
             setOnClickListener { finish() }
         }
 
@@ -323,13 +386,13 @@ class PlayerActivity : ComponentActivity() {
             playerView.resizeMode = resizeModes[resizeIndex].first
             resizeView.text = resizeModes[resizeIndex].second
         }
-        sleepView = pill("Sleep") { cycleSleepTimer() }
+        sleepView = pill(getString(R.string.sleep)) { cycleSleepTimer() }
 
         topBar.addView(back, LinearLayout.LayoutParams(dp(44), dp(44)))
         topBar.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         topBar.addView(sleepView, pillParams())
         topBar.addView(resizeView, pillParams())
-        if (pipSupported()) topBar.addView(pill("PiP") { enterPip() }, pillParams())
+        if (pipSupported()) topBar.addView(pill(getString(R.string.pip)) { enterPip() }, pillParams())
 
         playerView = PlayerView(this).apply {
             setBackgroundColor(Color.BLACK)
@@ -344,7 +407,92 @@ class PlayerActivity : ComponentActivity() {
             })
         }
 
+        timeBar = playerView.findViewById(androidx.media3.ui.R.id.exo_progress)
+
+        // Black curtain that fades away when a new episode starts, so the switch isn't abrupt.
+        curtain = View(this).apply {
+            setBackgroundColor(Color.BLACK)
+            alpha = 0f
+            visibility = View.GONE
+        }
+
+        // "Next episode · S1 E5 · Title" card shown in the middle as the new episode fades in.
+        titleCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(28), dp(18), dp(28), dp(18))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(0xCC101418.toInt())
+            }
+            visibility = View.GONE
+        }
+        titleCard.addView(TextView(this).apply {
+            text = getString(R.string.next_episode)
+            setTextColor(0xFF5EEAD4.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            gravity = Gravity.CENTER
+        })
+        titleCardText = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+            gravity = Gravity.CENTER
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        titleCard.addView(titleCardText)
+
+        // Countdown card near the end of an episode.
+        upNextCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(0xE6101418.toInt())
+            }
+            visibility = View.GONE
+        }
+        upNextCountdown = TextView(this).apply {
+            setTextColor(0xFF5EEAD4.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        }
+        upNextTitle = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(4), 0, dp(10))
+        }
+        upNextProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progressTintList = android.content.res.ColorStateList.valueOf(0xFF38BDF8.toInt())
+        }
+        val upNextButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        upNextPlay = pill(getString(R.string.play_now)) { player?.seekToNextMediaItem() }
+        val upNextCancel = pill(getString(R.string.cancel)) {
+            upNextCancelledFor = player?.currentMediaItemIndex ?: -1
+            player?.pauseAtEndOfMediaItems = true
+            hideUpNext()
+        }
+        upNextButtons.addView(upNextPlay)
+        upNextButtons.addView(upNextCancel, pillParams())
+        upNextCard.addView(upNextCountdown)
+        upNextCard.addView(upNextTitle)
+        upNextCard.addView(upNextProgress, LinearLayout.LayoutParams(dp(260), dp(4)))
+        upNextCard.addView(upNextButtons)
+
         root.addView(playerView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(curtain, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(titleCard, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        root.addView(
+            upNextCard,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END).apply {
+                setMargins(dp(24), dp(24), dp(24), dp(96))
+            },
+        )
         root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         setContentView(root)
     }
@@ -383,13 +531,88 @@ class PlayerActivity : ComponentActivity() {
         val minutes = sleepOptions[sleepIndex]
         handler.removeCallbacks(sleepRunnable)
         if (minutes == 0) {
-            sleepView.text = "Sleep"
-            Toast.makeText(this, "Sleep timer off", Toast.LENGTH_SHORT).show()
+            sleepView.text = getString(R.string.sleep)
+            Toast.makeText(this, getString(R.string.sleep_off), Toast.LENGTH_SHORT).show()
         } else {
             handler.postDelayed(sleepRunnable, minutes * 60_000L)
-            sleepView.text = "Sleep ${minutes}m"
-            Toast.makeText(this, "Stops in $minutes minutes", Toast.LENGTH_SHORT).show()
+            sleepView.text = getString(R.string.sleep_n, minutes)
+            Toast.makeText(this, getString(R.string.sleep_set, minutes), Toast.LENGTH_SHORT).show()
         }
+    }
+
+    // ------------------------------------------------------------------ up next
+
+    private fun nextEpisodeIndex(index: Int): Int? {
+        val item = items.getOrNull(index) ?: return null
+        val next = items.getOrNull(index + 1) ?: return null
+        return if (item.kind == WatchKind.EPISODE && next.kind == WatchKind.EPISODE && next.seriesId == item.seriesId) index + 1 else null
+    }
+
+    private fun updateUpNext() {
+        val p = player ?: return
+        if (inPip) return
+        val index = p.currentMediaItemIndex
+        val nextIndex = nextEpisodeIndex(index)
+        val duration = p.duration
+        if (nextIndex == null || duration == C.TIME_UNSET || duration < 60_000 || index == upNextCancelledFor) {
+            hideUpNext()
+            return
+        }
+        val remaining = duration - p.currentPosition
+        if (remaining > UP_NEXT_MS || remaining < 0) {
+            hideUpNext()
+            return
+        }
+        if (upNextShownFor != index) {
+            upNextShownFor = index
+            val next = items[nextIndex]
+            upNextTitle.text = next.title.substringAfter(" · ", next.title) + (next.subtitle?.let { " · $it" } ?: "")
+            upNextCard.apply {
+                visibility = View.VISIBLE
+                alpha = 0f
+                translationY = dp(40).toFloat()
+                animate().alpha(1f).translationY(0f).setDuration(350).start()
+            }
+            if (isTv) upNextPlay.requestFocus()
+        }
+        upNextCountdown.text = getString(R.string.next_episode_in, ceil(remaining / 1000.0).toInt().coerceAtLeast(1))
+        upNextProgress.progress = (1000 * (1 - remaining.toFloat() / UP_NEXT_MS)).toInt().coerceIn(0, 1000)
+    }
+
+    private fun hideUpNext() {
+        if (upNextShownFor == -1 && upNextCard.visibility != View.VISIBLE) return
+        upNextShownFor = -1
+        if (upNextCard.visibility == View.VISIBLE) {
+            upNextCard.animate().alpha(0f).translationY(dp(40).toFloat()).setDuration(250)
+                .withEndAction { upNextCard.visibility = View.GONE }
+                .start()
+        }
+    }
+
+    /** Fades the new episode in from black and shows its title for a moment. */
+    private fun announceEpisode(index: Int) {
+        if (inPip) return
+        val item = items.getOrNull(index) ?: return
+        curtain.animate().cancel()
+        curtain.visibility = View.VISIBLE
+        curtain.alpha = 1f
+        curtain.animate().alpha(0f).setStartDelay(250).setDuration(900)
+            .withEndAction { curtain.visibility = View.GONE }
+            .start()
+
+        titleCardText.text = item.title.substringAfter(" · ", item.title) + (item.subtitle?.let { "\n$it" } ?: "")
+        titleCard.animate().cancel()
+        titleCard.visibility = View.VISIBLE
+        titleCard.alpha = 0f
+        titleCard.scaleX = 0.94f
+        titleCard.scaleY = 0.94f
+        titleCard.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(150).setDuration(350)
+            .withEndAction {
+                titleCard.animate().alpha(0f).setStartDelay(2200).setDuration(500)
+                    .withEndAction { titleCard.visibility = View.GONE }
+                    .start()
+            }
+            .start()
     }
 
     // ------------------------------------------------------------------ playback
@@ -591,8 +814,10 @@ class PlayerActivity : ComponentActivity() {
         val current = entries.firstOrNull { now >= it.start && now < it.end }
         val next = entries.firstOrNull { it.start >= (current?.end ?: now) }
         val lines = ArrayList<String>()
-        if (current != null) lines.add("Now: ${current.title}  (${time.format(Date(current.start))}–${time.format(Date(current.end))})")
-        if (next != null) lines.add("Next: ${next.title}  ${time.format(Date(next.start))}")
+        if (current != null) {
+            lines.add(getString(R.string.epg_now, current.title, time.format(Date(current.start)), time.format(Date(current.end))))
+        }
+        if (next != null) lines.add(getString(R.string.epg_next, next.title, time.format(Date(next.start))))
         infoView.text = lines.joinToString("\n")
         infoView.visibility = if (lines.isEmpty()) View.GONE else View.VISIBLE
     }
@@ -626,15 +851,12 @@ class PlayerActivity : ComponentActivity() {
         }
 
         val message = when (error.errorCode) {
-            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ->
-                "The server refused this stream. Your account may be expired or using all its connections."
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> getString(R.string.err_stream_refused)
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
-                "Couldn't reach the stream. Check your internet connection."
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> getString(R.string.err_stream_network)
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
-            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ->
-                "This stream's format isn't supported on this device."
-            else -> "Can't play this stream (${error.errorCodeName})."
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> getString(R.string.err_stream_format)
+            else -> getString(R.string.err_stream_generic, error.errorCodeName)
         }
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
@@ -674,17 +896,17 @@ class PlayerActivity : ComponentActivity() {
         builder.setAspectRatio(ratio)
 
         val actions = ArrayList<RemoteAction>()
-        if (items.size > 1) actions.add(pipAction(CMD_PREVIOUS, R.drawable.ic_pip_prev, "Previous", 1))
+        if (items.size > 1) actions.add(pipAction(CMD_PREVIOUS, R.drawable.ic_pip_prev, getString(R.string.previous), 1))
         val playing = p?.isPlaying == true
         actions.add(
             pipAction(
                 CMD_PLAY_PAUSE,
                 if (playing) R.drawable.ic_pip_pause else R.drawable.ic_pip_play,
-                if (playing) "Pause" else "Play",
+                getString(if (playing) R.string.pause else R.string.play),
                 2,
             )
         )
-        if (items.size > 1) actions.add(pipAction(CMD_NEXT, R.drawable.ic_pip_next, "Next", 3))
+        if (items.size > 1) actions.add(pipAction(CMD_NEXT, R.drawable.ic_pip_next, getString(R.string.next), 3))
         builder.setActions(actions)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -715,5 +937,6 @@ class PlayerActivity : ComponentActivity() {
         const val CMD_PLAY_PAUSE = "play_pause"
         const val CMD_NEXT = "next"
         const val CMD_PREVIOUS = "previous"
+        const val UP_NEXT_MS = 15_000L
     }
 }

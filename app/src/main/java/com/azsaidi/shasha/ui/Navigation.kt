@@ -1,7 +1,9 @@
 package com.azsaidi.shasha.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -11,6 +13,7 @@ import com.azsaidi.shasha.data.Store
 @Composable
 fun ShashaNav() {
     val nav = rememberNavController()
+    val context = LocalContext.current
 
     val start = remember {
         val accounts = Store.accounts()
@@ -42,6 +45,7 @@ fun ShashaNav() {
                     resetTo("home")
                 },
                 onAdd = { nav.navigate("login") },
+                onEdit = { account -> nav.navigate("edit/${account.id}") },
                 onEmpty = { resetTo("login") },
             )
         }
@@ -55,11 +59,30 @@ fun ShashaNav() {
                 },
             )
         }
+        composable("edit/{id}") { entry ->
+            val id = entry.arguments?.getString("id").orEmpty()
+            val account = remember(id) { Store.accounts().firstOrNull { it.id == id } }
+            if (account == null) {
+                LaunchedEffect(Unit) { nav.popBackStack() }
+            } else {
+                LoginScreen(
+                    canGoBack = true,
+                    onBack = { nav.popBackStack() },
+                    onLoggedIn = { updated, auth ->
+                        Session.accountEdited(updated, auth)
+                        toastSaved(context)
+                        nav.popBackStack()
+                    },
+                    editing = account,
+                )
+            }
+        }
         composable("home") {
             HomeScreen(
                 onOpenMovie = { id -> nav.navigate("movie/$id") },
                 onOpenSeries = { id -> nav.navigate("series/$id") },
                 onSwitchAccount = { nav.navigate("accounts") },
+                onEditAccount = { id -> nav.navigate("edit/$id") },
                 onAccountRemoved = { resetTo(if (Store.accounts().isEmpty()) "login" else "accounts") },
             )
         }

@@ -1,12 +1,14 @@
 package com.azsaidi.shasha.ui
 
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -55,12 +58,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.azsaidi.shasha.R
@@ -74,17 +80,23 @@ import kotlinx.coroutines.launch
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.util.UUID
 
+/**
+ * Sign-in form. With [editing] set, it edits that playlist instead (same account, so favourites
+ * and watch history are kept).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
     canGoBack: Boolean,
     onBack: () -> Unit,
     onLoggedIn: (Account, AuthInfo) -> Unit,
+    editing: Account? = null,
 ) {
-    var name by rememberSaveable { mutableStateOf("") }
-    var username by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var server by rememberSaveable { mutableStateOf("") }
+    val context = LocalContext.current
+    var name by rememberSaveable { mutableStateOf(editing?.name.orEmpty()) }
+    var username by rememberSaveable { mutableStateOf(editing?.username.orEmpty()) }
+    var password by rememberSaveable { mutableStateOf(editing?.password.orEmpty()) }
+    var server by rememberSaveable { mutableStateOf(editing?.server.orEmpty()) }
     var showPassword by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -96,7 +108,7 @@ fun LoginScreen(
         loading = true
         error = null
         scope.launch {
-            when (val result = performLogin(name, username, password, server)) {
+            when (val result = performLogin(context, name, username, password, server, editing?.id)) {
                 is LoginResult.Success -> onLoggedIn(result.account, result.auth)
                 is LoginResult.Error -> error = result.message
             }
@@ -108,10 +120,10 @@ fun LoginScreen(
         topBar = {
             if (canGoBack) {
                 TopAppBar(
-                    title = { Text("Add account") },
+                    title = { Text(stringResource(if (editing != null) R.string.edit_account else R.string.add_account)) },
                     navigationIcon = {
                         IconButton(onClick = onBack, modifier = Modifier.focusRing(CircleShape)) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -119,121 +131,127 @@ fun LoginScreen(
             }
         },
     ) { padding ->
-      Row(
-          Modifier
-              .padding(padding)
-              .fillMaxSize()
-      ) {
-        if (isTv) {
-            PhoneLoginPanel(
-                onLoggedIn = onLoggedIn,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight(),
-            )
-        }
-        Column(
+        Row(
             Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(padding)
+                .fillMaxSize()
         ) {
-            Spacer(Modifier.height(if (canGoBack) 0.dp else 32.dp))
-            Image(
-                painter = painterResource(R.drawable.ic_logo),
-                contentDescription = null,
-                modifier = Modifier.size(120.dp),
-            )
-            Text("Shasha", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text(
-                "Sign in with the Xtream Codes details from your IPTV provider.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-
-            val fieldModifier = Modifier
-                .fillMaxWidth()
-                .widthIn(max = 480.dp)
-            val shape = RoundedCornerShape(14.dp)
-
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = { Text("Playlist name") },
-                singleLine = true,
-                shape = shape,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                modifier = fieldModifier,
-            )
-            OutlinedTextField(
-                value = username,
-                onValueChange = { username = it },
-                label = { Text("Username") },
-                singleLine = true,
-                shape = shape,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
-                modifier = fieldModifier,
-            )
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Password") },
-                singleLine = true,
-                shape = shape,
-                visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                    IconButton(onClick = { showPassword = !showPassword }, modifier = Modifier.focusRing(CircleShape)) {
-                        Icon(
-                            if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                            contentDescription = if (showPassword) "Hide password" else "Show password",
-                        )
-                    }
-                },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
-                modifier = fieldModifier,
-            )
-            OutlinedTextField(
-                value = server,
-                onValueChange = { server = it },
-                label = { Text("URL, domain or server") },
-                placeholder = { Text("http://example.com:8080") },
-                singleLine = true,
-                shape = shape,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { submit() }),
-                modifier = fieldModifier,
-            )
-
-            error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            if (isTv && editing == null) {
+                PhoneLoginPanel(
+                    onLoggedIn = onLoggedIn,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                )
             }
-
-            Button(
-                onClick = { submit() },
-                enabled = !loading,
-                shape = shape,
-                modifier = fieldModifier
-                    .height(52.dp)
-                    .focusRing(shape),
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .imePadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (loading) {
-                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                } else {
-                    Text("Log in", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(if (canGoBack) 0.dp else 32.dp))
+                if (editing == null) {
+                    Image(
+                        painter = painterResource(R.drawable.ic_logo),
+                        contentDescription = null,
+                        modifier = Modifier.size(120.dp),
+                    )
+                    Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                }
+                Text(
+                    stringResource(if (editing != null) R.string.edit_tip else R.string.login_subtitle),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(8.dp))
+
+                val fieldModifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 480.dp)
+                val shape = RoundedCornerShape(14.dp)
+
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(stringResource(R.string.playlist_name)) },
+                    singleLine = true,
+                    shape = shape,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    modifier = fieldModifier,
+                )
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text(stringResource(R.string.username)) },
+                    singleLine = true,
+                    shape = shape,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
+                    modifier = fieldModifier,
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text(stringResource(R.string.password)) },
+                    singleLine = true,
+                    shape = shape,
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showPassword = !showPassword }, modifier = Modifier.focusRing(CircleShape)) {
+                            Icon(
+                                if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = stringResource(if (showPassword) R.string.hide_password else R.string.show_password),
+                            )
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
+                    modifier = fieldModifier,
+                )
+                OutlinedTextField(
+                    value = server,
+                    onValueChange = { server = it },
+                    label = { Text(stringResource(R.string.server_field)) },
+                    placeholder = { Text(stringResource(R.string.server_placeholder)) },
+                    singleLine = true,
+                    shape = shape,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    modifier = fieldModifier,
+                )
+
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                }
+
+                Button(
+                    onClick = { submit() },
+                    enabled = !loading,
+                    shape = shape,
+                    modifier = fieldModifier
+                        .height(52.dp)
+                        .focusRing(shape),
+                ) {
+                    if (loading) {
+                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(stringResource(if (editing != null) R.string.save else R.string.log_in), style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+                if (editing == null) {
+                    Text(
+                        stringResource(R.string.login_tip),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
                 }
             }
-            Text(
-                "Tip: you can also paste a full M3U link from your provider into the server field.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
-      }
     }
 }
 
@@ -243,7 +261,14 @@ internal sealed class LoginResult {
 }
 
 /** Checks the details with the provider and saves the account if they work. */
-internal suspend fun performLogin(name: String, username: String, password: String, server: String): LoginResult {
+internal suspend fun performLogin(
+    context: Context,
+    name: String,
+    username: String,
+    password: String,
+    server: String,
+    existingId: String? = null,
+): LoginResult {
     var user = username.trim()
     var pass = password
     val raw = server.trim()
@@ -256,12 +281,12 @@ internal suspend fun performLogin(name: String, username: String, password: Stri
     }
 
     val normalized = XtreamApi.normalizeServer(raw)
-        ?: return LoginResult.Error("Enter the server address your provider gave you")
-    if (user.isEmpty() || pass.isEmpty()) return LoginResult.Error("Enter your username and password")
+        ?: return LoginResult.Error(context.getString(R.string.err_server))
+    if (user.isEmpty() || pass.isEmpty()) return LoginResult.Error(context.getString(R.string.err_credentials))
 
     val account = Account(
-        id = UUID.randomUUID().toString(),
-        name = name.trim().ifEmpty { parsed?.host ?: "My playlist" },
+        id = existingId ?: UUID.randomUUID().toString(),
+        name = name.trim().ifEmpty { parsed?.host ?: context.getString(R.string.default_playlist) },
         server = normalized,
         username = user,
         password = pass,
@@ -273,8 +298,13 @@ internal suspend fun performLogin(name: String, username: String, password: Stri
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        LoginResult.Error(friendlyError(e))
+        LoginResult.Error(friendlyError(context, e))
     }
+}
+
+/** Shows a short confirmation after saving an edited playlist. */
+internal fun toastSaved(context: Context) {
+    Toast.makeText(context, context.getString(R.string.saved_changes), Toast.LENGTH_SHORT).show()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -282,19 +312,20 @@ internal suspend fun performLogin(name: String, username: String, password: Stri
 fun AccountsScreen(
     onOpen: (Account) -> Unit,
     onAdd: () -> Unit,
+    onEdit: (Account) -> Unit,
     onEmpty: () -> Unit,
 ) {
     var accounts by remember { mutableStateOf(Store.accounts()) }
     var toDelete by remember { mutableStateOf<Account?>(null) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Accounts") }) },
+        topBar = { TopAppBar(title = { Text(stringResource(R.string.accounts)) }) },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onAdd,
                 modifier = Modifier.focusRing(RoundedCornerShape(16.dp)),
                 icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text("Add account") },
+                text = { Text(stringResource(R.string.add_account)) },
             )
         },
     ) { padding ->
@@ -307,8 +338,13 @@ fun AccountsScreen(
                     },
                     leadingContent = { Icon(Icons.Filled.AccountCircle, contentDescription = null) },
                     trailingContent = {
-                        IconButton(onClick = { toDelete = account }, modifier = Modifier.focusRing(CircleShape)) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Remove")
+                        Row {
+                            IconButton(onClick = { onEdit(account) }, modifier = Modifier.focusRing(CircleShape)) {
+                                Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.edit_playlist))
+                            }
+                            IconButton(onClick = { toDelete = account }, modifier = Modifier.focusRing(CircleShape)) {
+                                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.remove))
+                            }
                         }
                     },
                     modifier = Modifier
@@ -323,8 +359,8 @@ fun AccountsScreen(
     toDelete?.let { account ->
         AlertDialog(
             onDismissRequest = { toDelete = null },
-            title = { Text("Remove ${account.name}?") },
-            text = { Text("Its login details and favorites will be deleted from this phone.") },
+            title = { Text(stringResource(R.string.remove_account_title, account.name)) },
+            text = { Text(stringResource(R.string.remove_account_body)) },
             confirmButton = {
                 TextButton(onClick = {
                     Store.removeAccount(account.id)
@@ -332,9 +368,9 @@ fun AccountsScreen(
                     accounts = Store.accounts()
                     toDelete = null
                     if (accounts.isEmpty()) onEmpty()
-                }) { Text("Remove") }
+                }) { Text(stringResource(R.string.remove)) }
             },
-            dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { toDelete = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 }

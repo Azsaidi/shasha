@@ -2,6 +2,7 @@ package com.azsaidi.shasha.player
 
 import android.content.Context
 import android.content.Intent
+import com.azsaidi.shasha.R
 import com.azsaidi.shasha.data.Episode
 import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.StreamItem
@@ -89,7 +90,7 @@ object Playback {
         val accountId = Session.account?.id ?: return
         val items = episodes.map { ep ->
             PlayItem(
-                title = "$seriesName · S${ep.season} E${ep.number}",
+                title = "$seriesName · " + context.getString(R.string.episode_code, ep.season, ep.number),
                 url = api.episodeUrl(ep.id, ep.extension),
                 kind = WatchKind.EPISODE,
                 streamId = ep.id,
