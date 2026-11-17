@@ -62,6 +62,7 @@ struct BrowserView: View {
     @State private var total = 0
     @State private var filtering = false
     @State private var showCategories = false
+    @FocusState private var searchFocused: Bool
 
     init(type: ContentType) {
         self.type = type
@@ -101,16 +102,6 @@ struct BrowserView: View {
         }
         .screenBackground()
         .navigationTitle(L(type.titleKey))
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic),
-                    prompt: L("search_x", L(type.nounKey)))
-        .searchSuggestions {
-            if query.isEmpty {
-                ForEach(session.searches, id: \.self) { s in
-                    Label(s, systemImage: "clock.arrow.circlepath").searchCompletion(s)
-                }
-            }
-        }
-        .onSubmit(of: .search) { session.rememberSearch(query) }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Menu {
@@ -192,6 +183,13 @@ struct BrowserView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Banners()
+                SearchField(prompt: L("search_x", L(type.nounKey)), text: $query, focus: $searchFocused) {
+                    session.rememberSearch(query)
+                }
+                .padding(.horizontal, 16)
+                if searchFocused && query.isEmpty && !session.searches.isEmpty {
+                    RecentSearchChips(searches: session.searches) { query = $0 }
+                }
                 categoryChips
                 if shown.isEmpty && !filtering {
                     if library.items.isEmpty {

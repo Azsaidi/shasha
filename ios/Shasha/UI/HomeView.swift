@@ -4,6 +4,7 @@ struct HomeView: View {
     @ObservedObject private var session = Session.shared
     @State private var newMovies: [StreamItem] = []
     @State private var newSeries: [StreamItem] = []
+    @State private var opened: StreamItem?
 
     var body: some View {
         ScrollView {
@@ -37,7 +38,7 @@ struct HomeView: View {
                                     .frame(width: 220)
                             }
                             .buttonStyle(.plain)
-                            .contextMenu { HistoryMenu(entry: entry) }
+                            .contextMenu { HistoryMenu(entry: entry, onOpen: { opened = page(for: entry) }) }
                         }
                     }
                 }
@@ -108,6 +109,9 @@ struct HomeView: View {
         .navigationDestination(for: StreamItem.self) { item in
             DetailView(item: item)
         }
+        .navigationDestination(isPresented: Binding(get: { opened != nil }, set: { if !$0 { opened = nil } })) {
+            if let opened { DetailView(item: opened) }
+        }
         .task(id: session.cacheVersion) { await loadNew() }
         .task(id: session.hideAdult) { await loadNew() }
         .refreshable { session.refreshAll() }
@@ -122,6 +126,16 @@ struct HomeView: View {
         }
         .buttonStyle(.plain)
         .contextMenu { StreamItemMenu(item: item) }
+    }
+
+    /// The film, or the series an episode belongs to.
+    private func page(for entry: WatchEntry) -> StreamItem {
+        if entry.kind == .episode {
+            return StreamItem(id: entry.seriesId ?? entry.streamId, name: entry.seriesName ?? entry.title, icon: entry.image,
+                              categoryId: nil, type: .series, ext: nil, rating: nil, added: nil, year: nil)
+        }
+        return StreamItem(id: entry.streamId, name: entry.title, icon: entry.image, categoryId: nil, type: .movie,
+                          ext: entry.ext, rating: nil, added: nil, year: nil)
     }
 
     private func progress(_ item: StreamItem) -> Double? {

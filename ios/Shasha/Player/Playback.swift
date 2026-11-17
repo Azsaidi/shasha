@@ -323,6 +323,26 @@ enum DownloadActions {
         return ok
     }
 
+    /// Downloads an episode straight from Continue watching.
+    @discardableResult
+    static func entry(_ entry: WatchEntry) -> Bool {
+        guard let api = Session.shared.api, let acc = Session.shared.account else { return false }
+        let e = entry.ext ?? "mp4"
+        let sub = entry.subtitle ?? ""
+        var season = 0, episode = 0
+        if let m = sub.range(of: "S(\\d+)\\s*E(\\d+)", options: .regularExpression) {
+            let nums = sub[m].split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+            if nums.count >= 2 { season = nums[0]; episode = nums[1] }
+        }
+        let ok = Downloads.shared.enqueue(
+            url: api.episodeURL(entry.streamId, ext: e), kind: .episode, streamId: entry.streamId, accountId: acc.id,
+            title: entry.seriesName ?? entry.title, subtitle: entry.subtitle, image: entry.image, ext: e,
+            seriesId: entry.seriesId, seriesName: entry.seriesName ?? entry.title, season: season, episode: episode
+        )
+        Toast.shared.show(ok ? L("download_started", entry.subtitle ?? entry.title) : L("download_error"))
+        return ok
+    }
+
     /// Downloads every episode in the list that isn't already downloaded or downloading.
     @discardableResult
     static func episodes(seriesId: String, seriesName: String, cover: String?, _ episodes: [Episode]) -> Int {

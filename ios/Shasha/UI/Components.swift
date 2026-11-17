@@ -460,3 +460,62 @@ extension View {
         background(Theme.background.ignoresSafeArea())
     }
 }
+
+/// A search box that lives in the page (the system search bar jumps around between tabs on iOS 26).
+struct SearchField: View {
+    let prompt: String
+    @Binding var text: String
+    var focus: FocusState<Bool>.Binding
+    var onSubmit: () -> Void = {}
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField(prompt, text: $text)
+                .focused(focus)
+                .submitLabel(.search)
+                .onSubmit(onSubmit)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L("clear_search"))
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 44)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// Recent searches as tappable chips.
+struct RecentSearchChips: View {
+    let searches: [String]
+    let onPick: (String) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(searches, id: \.self) { s in
+                    Button {
+                        onPick(s)
+                    } label: {
+                        Label(s, systemImage: "clock.arrow.circlepath")
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .padding(.horizontal, 12)
+                            .frame(height: 34)
+                            .background(Theme.cardHigh, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+}

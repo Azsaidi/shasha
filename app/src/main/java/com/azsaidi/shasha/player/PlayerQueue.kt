@@ -245,6 +245,34 @@ object DownloadActions {
         return ok
     }
 
+    /** Downloads an episode straight from Continue watching. */
+    fun entry(context: Context, entry: WatchEntry): Boolean {
+        val api = Session.api ?: return false
+        val accountId = Session.account?.id ?: return false
+        val ext = entry.extension ?: "mp4"
+        val code = Regex("S(\\d+)\\s*E(\\d+)").find(entry.subtitle.orEmpty())
+        val ok = Downloads.enqueue(
+            url = api.episodeUrl(entry.streamId, ext),
+            kind = WatchKind.EPISODE,
+            streamId = entry.streamId,
+            accountId = accountId,
+            title = entry.seriesName ?: entry.title,
+            subtitle = entry.subtitle,
+            image = entry.image,
+            extension = ext,
+            seriesId = entry.seriesId,
+            seriesName = entry.seriesName ?: entry.title,
+            season = code?.groupValues?.get(1)?.toIntOrNull() ?: 0,
+            episode = code?.groupValues?.get(2)?.toIntOrNull() ?: 0,
+        )
+        Toast.makeText(
+            context,
+            if (ok) context.getString(R.string.download_started, entry.subtitle ?: entry.title) else context.getString(R.string.download_error),
+            Toast.LENGTH_SHORT,
+        ).show()
+        return ok
+    }
+
     /** Downloads every episode in the list that isn't already downloaded or downloading. */
     fun episodes(context: Context, seriesId: String, seriesName: String, cover: String?, episodes: List<Episode>): Int {
         askForNotifications(context)

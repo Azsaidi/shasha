@@ -282,4 +282,5 @@
     <string name="dl_waiting_stream">في انتظار إيقاف التشغيل (يسمح اشتراكك باتصال واحد)</string>
     <string name="dl_retrying">فشل، ستتم إعادة المحاولة قريبًا…</string>
     <string name="now_playing">قيد التشغيل الآن</string>
+    <string name="open_series">الذهاب إلى المسلسل</string>
 </resources>

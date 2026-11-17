@@ -6,10 +6,15 @@ struct SearchView: View {
     @State private var query = ""
     @State private var results: [ContentType: [StreamItem]] = [:]
     @State private var searching = false
+    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
+                SearchField(prompt: L("home_search_hint"), text: $query, focus: $fieldFocused) {
+                    session.rememberSearch(query)
+                }
+                .padding(.horizontal, 16)
                 if query.trimmingCharacters(in: .whitespaces).count < 2 {
                     recentSearches
                 } else if searching && results.isEmpty {
@@ -31,8 +36,14 @@ struct SearchView: View {
         .screenBackground()
         .navigationTitle(L("search"))
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: L("home_search_hint"))
-        .onSubmit(of: .search) { session.rememberSearch(query) }
+        .onAppear {
+            if query.isEmpty {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    fieldFocused = true
+                }
+            }
+        }
         .task(id: query) { await search() }
     }
 

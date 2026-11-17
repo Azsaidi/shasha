@@ -62,6 +62,7 @@ import com.azsaidi.shasha.data.ContentType
 import com.azsaidi.shasha.data.Library
 import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.StreamItem
+import com.azsaidi.shasha.data.WatchKind
 import com.azsaidi.shasha.data.WatchEntry
 import com.azsaidi.shasha.data.displaySubtitle
 import com.azsaidi.shasha.player.Playback
@@ -198,7 +199,19 @@ private fun HomeShelves(
                             scope.launch { Playback.resume(context, entry) }
                         },
                         onLongClick = {
-                            showHistoryMenu(context, entry) {
+                            showHistoryMenu(
+                                context,
+                                entry,
+                                onOpen = {
+                                    memory.opened("cw-${entry.key}")
+                                    val item = if (entry.kind == WatchKind.EPISODE) {
+                                        StreamItem(entry.seriesId ?: entry.streamId, entry.seriesName ?: entry.title, entry.image, null, ContentType.SERIES, null, null)
+                                    } else {
+                                        StreamItem(entry.streamId, entry.title, entry.image, null, ContentType.MOVIE, entry.extension, null)
+                                    }
+                                    onOpen(item, emptyList())
+                                },
+                            ) {
                                 memory.opened("cw-${entry.key}")
                                 scope.launch { Playback.resume(context, entry) }
                             }

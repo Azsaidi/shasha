@@ -340,7 +340,9 @@ struct SeriesDetailView: View {
 
             LazyVStack(spacing: 10) {
                 ForEach(Array(episodes.enumerated()), id: \.element.id) { i, ep in
-                    EpisodeRow(episode: ep, seriesName: name, cover: cover)
+                    EpisodeRow(episode: ep, seriesName: name, cover: cover) {
+                        DownloadActions.episodes(seriesId: item.id, seriesName: name, cover: cover, [ep])
+                    }
                         .contentShape(Rectangle())
                         .onTapGesture {
                             Playback.episodes(seriesId: item.id, seriesName: name, cover: cover, episodes: episodes, index: i)
@@ -377,6 +379,7 @@ private struct EpisodeRow: View {
     let episode: Episode
     let seriesName: String
     let cover: String?
+    let onDownload: () -> Void
     @ObservedObject private var session = Session.shared
     @ObservedObject private var downloads = Downloads.shared
 
@@ -427,8 +430,60 @@ private struct EpisodeRow: View {
                 }
             }
             Spacer(minLength: 0)
+            EpisodeDownloadIcon(kind: .episode, streamId: episode.id, start: onDownload)
         }
         .padding(8)
         .background(Theme.card.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// Small download button for an episode: tap to download; once added, tap for cancel / delete / retry.
+struct EpisodeDownloadIcon: View {
+    let kind: WatchKind
+    let streamId: String
+    let start: () -> Void
+    @ObservedObject private var downloads = Downloads.shared
+
+    var body: some View {
+        let existing = downloads.find(kind, streamId)
+        let status = existing.flatMap { downloads.status[$0.key] }
+        Group {
+            if existing == nil {
+                Button(action: start) { icon(nil) }
+            } else {
+                Menu {
+                    DownloadMenuButton(kind: kind, streamId: streamId, start: start)
+                } label: {
+                    icon(status)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(existing == nil ? L("download") : downloadStatusText(status, item: existing!))
+    }
+
+    @ViewBuilder
+    private func icon(_ status: DownloadStatus?) -> some View {
+        ZStack {
+            switch status?.state {
+            case .done:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            case .failed:
+                Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+            case .running, .queued, .paused:
+                Circle().stroke(.white.opacity(0.25), lineWidth: 3)
+                Circle()
+                    .trim(from: 0, to: status?.fraction ?? 0.02)
+                    .stroke(Theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: "stop.fill").font(.system(size: 8)).foregroundStyle(Theme.accent)
+            case nil:
+                Image(systemName: "arrow.down.circle").foregroundStyle(.white)
+            }
+        }
+        .font(.system(size: 22))
+        .frame(width: 26, height: 26)
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
     }
 }

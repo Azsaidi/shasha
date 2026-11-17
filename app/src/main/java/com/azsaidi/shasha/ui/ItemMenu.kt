@@ -255,10 +255,24 @@ private fun watchedAction(context: Context, entry: WatchEntry): MenuAction {
 }
 
 /** Options for a Continue watching card or a recently watched channel. */
-fun showHistoryMenu(context: Context, entry: WatchEntry, onPlay: () -> Unit) {
+fun showHistoryMenu(context: Context, entry: WatchEntry, onOpen: (() -> Unit)? = null, onPlay: () -> Unit) {
     val actions = ArrayList<MenuAction>()
     actions.add(MenuAction(context.getString(R.string.play), Icons.Filled.PlayArrow, onPlay))
+    // Film page, or the series page for an episode.
+    if (onOpen != null && entry.kind != WatchKind.LIVE) {
+        actions.add(MenuAction(context.getString(if (entry.kind == WatchKind.EPISODE) R.string.open_series else R.string.open), Icons.Filled.OpenInNew, onOpen))
+    }
     actions.add(splitAction(context) { Playback.entryItem(entry) })
+    if (entry.kind != WatchKind.LIVE) {
+        val kind = entry.kind
+        actions.add(downloadAction(context, kind, entry.streamId) {
+            if (kind == WatchKind.MOVIE) {
+                DownloadActions.movie(context, entry.streamId, entry.title, entry.image, entry.extension)
+            } else {
+                DownloadActions.entry(context, entry)
+            }
+        })
+    }
     when (entry.kind) {
         WatchKind.LIVE -> {
             actions.add(favouriteAction(context, StreamItem(entry.streamId, entry.title, entry.image, null, ContentType.LIVE, null, null)))

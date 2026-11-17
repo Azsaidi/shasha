@@ -55,11 +55,12 @@ fun rememberIsTv(): Boolean {
  */
 fun Modifier.focusRing(
     shape: Shape = RoundedCornerShape(10.dp),
-    width: Dp = 3.dp,
+    width: Dp = 4.dp,
     focusedScale: Float = 1f,
 ): Modifier = composed {
     var focused by remember { mutableStateOf(false) }
-    val color = MaterialTheme.colorScheme.primary
+    // Solid white: easy to spot on any background from across the room.
+    val color = androidx.compose.ui.graphics.Color.White
     val scale by animateFloatAsState(if (focused) focusedScale else 1f, label = "focusScale")
     this
         .onFocusChanged { focused = it.hasFocus }
@@ -131,6 +132,8 @@ fun Modifier.remembered(memory: FocusMemory?, key: String): Modifier =
 private class RemotePressState {
     var down = false
     var fired = false
+    /** True only when this item itself has focus, not a button inside it (like a download icon). */
+    var focused = false
 }
 
 /**
@@ -143,7 +146,10 @@ fun Modifier.pressable(onClick: () -> Unit, onLongClick: (() -> Unit)? = null): 
     val latestClick by rememberUpdatedState(onClick)
     val latestLongClick by rememberUpdatedState(onLongClick)
     this
+        .onFocusChanged { state.focused = it.isFocused }
         .onPreviewKeyEvent { event ->
+            // OK on a button inside the row (e.g. its download icon) belongs to that button.
+            if (!state.focused) return@onPreviewKeyEvent false
             val key = event.nativeKeyEvent
             val isOk = key.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
                 key.keyCode == KeyEvent.KEYCODE_ENTER ||

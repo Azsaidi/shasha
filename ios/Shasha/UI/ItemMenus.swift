@@ -126,13 +126,29 @@ struct StreamItemMenu: View {
 /// Options for a Continue watching card or a recently watched channel.
 struct HistoryMenu: View {
     let entry: WatchEntry
+    /// Opens the film page, or the series page for an episode.
+    var onOpen: (() -> Void)? = nil
     // Not observed: menus are rebuilt with their screen, and observing here would redraw every poster.
     private var session: Session { .shared }
 
     var body: some View {
         Button { Actions.play(entry) } label: { Label(L("play"), systemImage: "play.fill") }
+        if let onOpen, entry.kind != .live {
+            Button(action: onOpen) {
+                Label(entry.kind == .episode ? L("open_series") : L("open"), systemImage: "rectangle.stack")
+            }
+        }
         Button { MultiView.shared.add(Playback.entryItem(entry)) } label: {
             Label(L("add_split"), systemImage: "rectangle.split.2x2")
+        }
+        if entry.kind != .live {
+            DownloadMenuButton(kind: entry.kind, streamId: entry.streamId) {
+                if entry.kind == .movie {
+                    DownloadActions.movie(entry.streamId, title: entry.title, image: entry.image, ext: entry.ext)
+                } else {
+                    DownloadActions.entry(entry)
+                }
+            }
         }
         switch entry.kind {
         case .live:
