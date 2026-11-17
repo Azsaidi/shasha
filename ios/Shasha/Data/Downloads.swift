@@ -139,11 +139,13 @@ final class Downloads: NSObject, ObservableObject {
         // Back in the app: start a piece that iOS was holding back while the app was in the background.
         NotificationCenter.default.addObserver(forName: Notification.Name("UIApplicationWillEnterForegroundNotification"),
                                                object: nil, queue: .main) { [weak self] _ in
-            guard let self, let task = self.currentTask, task.countOfBytesReceived == 0 else { return }
+            guard let self, let task = self.currentTask, let key = self.currentKey,
+                  task.countOfBytesReceived == 0 else { return }
             self.stopping = true
             self.currentTask = nil
             self.currentKey = nil
             task.cancel()
+            self.status[key]?.state = .queued
             self.kick()
         }
 
@@ -447,8 +449,12 @@ final class Downloads: NSObject, ObservableObject {
                 // Done when we reach the known size, or (size unknown) when a piece comes back short.
                 if (known > 0 && have >= known) || (known <= 0 && pieceBytes < requested) {
                     self.finish(key)
-                } else {
-                    self.status[key]?.bytes = have
+                } else if var s = self.status[key] {
+                    // Not finished: line it up for the next piece (kick() starts it straight away).
+                    s.bytes = have
+                    s.state = .queued
+                    s.reason = 0
+                    self.status[key] = s
                 }
             }
         }
