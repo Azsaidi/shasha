@@ -8,6 +8,7 @@ import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.StreamItem
 import com.azsaidi.shasha.data.WatchEntry
 import com.azsaidi.shasha.data.WatchKind
+import com.azsaidi.shasha.data.tidyEpisodeTitle
 import kotlinx.coroutines.withTimeoutOrNull
 
 data class PlayItem(
@@ -95,7 +96,7 @@ object Playback {
                 kind = WatchKind.EPISODE,
                 streamId = ep.id,
                 accountId = accountId,
-                subtitle = ep.title,
+                subtitle = tidyEpisodeTitle(ep.title, seriesName),
                 image = ep.image ?: cover,
                 extension = ep.extension,
                 seriesId = seriesId,

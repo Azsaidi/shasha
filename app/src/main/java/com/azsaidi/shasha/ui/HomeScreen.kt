@@ -958,6 +958,12 @@ private fun SettingsTab(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        OutlinedButton(onClick = { onEditAccount(account.id) }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
+            Icon(Icons.Filled.Edit, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.edit_playlist))
+        }
+
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
             modifier = Modifier.fillMaxWidth(),
@@ -983,12 +989,6 @@ private fun SettingsTab(
                     )
                 }
             }
-        }
-
-        OutlinedButton(onClick = { onEditAccount(account.id) }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
-            Icon(Icons.Filled.Edit, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.edit_playlist))
         }
 
         Text(stringResource(R.string.language), style = MaterialTheme.typography.titleSmall)

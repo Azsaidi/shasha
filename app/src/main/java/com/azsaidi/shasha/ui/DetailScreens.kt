@@ -71,6 +71,7 @@ import com.azsaidi.shasha.data.StreamItem
 import com.azsaidi.shasha.data.VodInfo
 import com.azsaidi.shasha.data.WatchEntry
 import com.azsaidi.shasha.data.WatchKind
+import com.azsaidi.shasha.data.tidyEpisodeTitle
 import com.azsaidi.shasha.player.Playback
 import kotlinx.coroutines.CancellationException
 
@@ -245,9 +246,9 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
 }
 
 /** What the big button on a series page should do. */
-private data class SeriesAction(val label: String, val season: Int, val index: Int, val fromStart: Boolean)
+internal data class SeriesAction(val label: String, val season: Int, val index: Int, val fromStart: Boolean)
 
-private fun seriesAction(context: Context, info: SeriesInfo, latest: WatchEntry?): SeriesAction? {
+internal fun seriesAction(context: Context, info: SeriesInfo, latest: WatchEntry?): SeriesAction? {
     val seasons = info.seasons.filterValues { it.isNotEmpty() }
     val first = seasons.entries.firstOrNull() ?: return null
     fun code(ep: Episode) = context.getString(R.string.episode_code, ep.season, ep.number)
@@ -385,6 +386,7 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                                 cover,
                                 watch,
                                 Modifier.remembered(memory, "ep-${episode.id}"),
+                                seriesName = title,
                                 onLongClick = { showEpisodeMenu(context, episode, id, title, cover, play) },
                                 onClick = play,
                             )
@@ -432,12 +434,14 @@ private fun EpisodeRow(
     fallbackImage: String?,
     watch: WatchEntry?,
     modifier: Modifier,
+    seriesName: String,
     onLongClick: () -> Unit,
     onClick: () -> Unit,
 ) {
     ListItem(
         headlineContent = {
-            Text("${episode.number}. ${episode.title}", maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val name = tidyEpisodeTitle(episode.title, seriesName) ?: stringResource(R.string.episode_n, episode.number)
+            Text("${episode.number}. $name", maxLines = 2, overflow = TextOverflow.Ellipsis)
         },
         supportingContent = {
             val details = listOfNotNull(

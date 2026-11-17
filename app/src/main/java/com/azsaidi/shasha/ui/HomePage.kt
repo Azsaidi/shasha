@@ -63,6 +63,7 @@ import com.azsaidi.shasha.data.Library
 import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.StreamItem
 import com.azsaidi.shasha.data.WatchEntry
+import com.azsaidi.shasha.data.displaySubtitle
 import com.azsaidi.shasha.player.Playback
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -373,7 +374,7 @@ private fun ContinueCard(entry: WatchEntry, modifier: Modifier, onClick: () -> U
         } else {
             null
         }
-        val detail = listOfNotNull(entry.subtitle, remaining).joinToString(" · ")
+        val detail = listOfNotNull(entry.displaySubtitle(), remaining).joinToString(" · ")
         Text(
             detail.ifEmpty { " " },
             style = MaterialTheme.typography.labelSmall,

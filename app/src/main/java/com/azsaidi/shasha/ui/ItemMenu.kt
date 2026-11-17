@@ -48,6 +48,14 @@ import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.StreamItem
 import com.azsaidi.shasha.data.WatchEntry
 import com.azsaidi.shasha.data.WatchKind
+import com.azsaidi.shasha.data.tidyEpisodeTitle
+import com.azsaidi.shasha.player.Playback
+import android.view.KeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class MenuAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
 
@@ -65,11 +73,24 @@ object ItemMenu {
     fun Host() {
         val current = request ?: return
         val firstFocus = remember(current) { FocusRequester() }
+        // The menu usually opens while OK is still held down. Ignore OK until it has been let go
+        // and pressed again, so the release doesn't pick the first option by itself.
+        val armed = remember(current) { booleanArrayOf(false) }
         AlertDialog(
             onDismissRequest = { request = null },
             title = { Text(current.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
             text = {
-                Column {
+                Column(
+                    Modifier.onPreviewKeyEvent { event ->
+                        val key = event.nativeKeyEvent
+                        val isOk = key.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                            key.keyCode == KeyEvent.KEYCODE_ENTER ||
+                            key.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+                        if (!isOk) return@onPreviewKeyEvent false
+                        if (key.action == KeyEvent.ACTION_DOWN && key.repeatCount == 0) armed[0] = true
+                        !armed[0]
+                    },
+                ) {
                     current.actions.forEachIndexed { index, action ->
                         Row(
                             Modifier
@@ -117,11 +138,21 @@ private fun favouriteAction(context: Context, item: StreamItem): MenuAction {
 /** Options for a channel, film or series from any list. */
 fun showStreamItemMenu(context: Context, item: StreamItem, onOpen: (() -> Unit)?) {
     val actions = ArrayList<MenuAction>()
-    if (onOpen != null) {
-        val live = item.type == ContentType.LIVE
-        actions.add(
-            MenuAction(context.getString(if (live) R.string.play else R.string.open), if (live) Icons.Filled.PlayArrow else Icons.Filled.OpenInNew, onOpen)
-        )
+    when (item.type) {
+        ContentType.LIVE -> if (onOpen != null) {
+            actions.add(MenuAction(context.getString(R.string.play), Icons.Filled.PlayArrow, onOpen))
+        }
+        ContentType.MOVIE -> {
+            actions.add(MenuAction(context.getString(R.string.play), Icons.Filled.PlayArrow) {
+                // Resumes from the saved position if there is one.
+                Playback.movie(context, item.id, item.name, item.icon, item.extension)
+            })
+            if (onOpen != null) actions.add(MenuAction(context.getString(R.string.open), Icons.Filled.OpenInNew, onOpen))
+        }
+        ContentType.SERIES -> {
+            actions.add(MenuAction(context.getString(R.string.play), Icons.Filled.PlayArrow) { playSeries(context, item) })
+            if (onOpen != null) actions.add(MenuAction(context.getString(R.string.open), Icons.Filled.OpenInNew, onOpen))
+        }
     }
     actions.add(favouriteAction(context, item))
     when (item.type) {
@@ -150,6 +181,30 @@ fun showStreamItemMenu(context: Context, item: StreamItem, onOpen: (() -> Unit)?
         }
     }
     ItemMenu.show(item.name, actions)
+}
+
+private val menuScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+/** Plays a series straight from its poster: resumes, moves on to the next episode, or starts at S1 E1. */
+private fun playSeries(context: Context, item: StreamItem) {
+    val api = Session.api ?: return
+    menuScope.launch {
+        val info = runCatching { api.seriesInfo(item.id) }.getOrNull()
+        if (info == null) {
+            Toast.makeText(context, context.getString(R.string.couldnt_load_series), Toast.LENGTH_SHORT).show()
+            return@launch
+        }
+        val action = seriesAction(context, info, Session.latestEpisode(item.id)) ?: return@launch
+        Playback.episodes(
+            context,
+            item.id,
+            item.name,
+            info.cover ?: item.icon,
+            info.seasons[action.season].orEmpty(),
+            action.index,
+            action.fromStart,
+        )
+    }
 }
 
 private fun watchedAction(context: Context, entry: WatchEntry): MenuAction {
@@ -199,11 +254,13 @@ fun showEpisodeMenu(
     onPlay: () -> Unit,
 ) {
     val code = context.getString(R.string.episode_code, episode.season, episode.number)
+    val name = tidyEpisodeTitle(episode.title, seriesName)
+    val label = listOfNotNull(code, name).joinToString(" · ")
     val entry = Session.historyEntry(WatchKind.EPISODE, episode.id) ?: WatchEntry(
         kind = WatchKind.EPISODE,
         streamId = episode.id,
         title = seriesName,
-        subtitle = "$code · ${episode.title}",
+        subtitle = label,
         image = episode.image ?: image,
         extension = episode.extension,
         seriesId = seriesId,
@@ -213,7 +270,7 @@ fun showEpisodeMenu(
         MenuAction(context.getString(R.string.play), Icons.Filled.PlayArrow, onPlay),
         watchedAction(context, entry),
     )
-    ItemMenu.show("$code · ${episode.title}", actions)
+    ItemMenu.show(label, actions)
 }
 
 /** Options for a saved account. */

@@ -23,6 +23,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.rememberCoroutineScope
@@ -63,9 +65,14 @@ fun Modifier.focusRing(
         .onFocusChanged { focused = it.hasFocus }
         // Draw the focused item above its neighbours so the enlarged card isn't covered.
         .zIndex(if (focused) 1f else 0f)
-        .graphicsLayer {
-            scaleX = scale
-            scaleY = scale
+        // Scale only when drawing. A graphicsLayer scale changes the item's measured bounds, so
+        // lists kept re-scrolling to "bring it into view" while the zoom animated (the jitter).
+        .drawWithContent {
+            if (scale == 1f) {
+                drawContent()
+            } else {
+                scale(scale) { this@drawWithContent.drawContent() }
+            }
         }
         .then(if (focused) Modifier.border(width, color, shape) else Modifier)
 }
