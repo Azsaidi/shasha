@@ -55,6 +55,8 @@ fun ShashaNav() {
                 onBack = { nav.popBackStack() },
                 onLoggedIn = { account, auth ->
                     Session.open(account, auth)
+                    // First sign-in: fetch everything now, with the progress bar showing.
+                    Session.refreshAll()
                     resetTo("home")
                 },
             )

@@ -93,9 +93,11 @@ final class PlayerPresenter: ObservableObject {
 
     func dismissPlayer() {
         guard let model = player, !model.hiding else { return }
-        model.close()
-        model.hiding = true
+        // Keep the (paused) picture on screen while it turns upright, so there's no black flash
+        // and the app never shows sideways.
+        model.prepareToClose()
         rotateBack {
+            model.close()
             self.withoutAnimation { self.player = nil }
         }
     }

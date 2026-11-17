@@ -85,14 +85,11 @@ struct MultiViewScreen: View {
             ZStack {
                 Color.black.ignoresSafeArea()
                 grid(in: geo.size)
-                if model.uiVisible {
+                if model.uiVisible && !presenter.multiHiding {
                     overlay
                         .transition(.opacity)
                 }
                 ToastOverlay()
-                if presenter.multiHiding {
-                    Color.black.ignoresSafeArea()
-                }
             }
         }
         .ignoresSafeArea()
@@ -106,9 +103,6 @@ struct MultiViewScreen: View {
         }
         .onDisappear {
             model.stopAll()
-        }
-        .onChange(of: presenter.multiHiding) { hiding in
-            if hiding { model.stopAll() }
         }
         .onChange(of: multi.items) { items in
             if items.isEmpty {
@@ -143,7 +137,7 @@ struct MultiViewScreen: View {
                         let i = r * columns + c
                         if i < tiles.count {
                             TileView(tile: tiles[i], selected: model.selected == tiles[i].id && tiles.count > 1,
-                                     showUI: model.uiVisible)
+                                     showUI: model.uiVisible && !presenter.multiHiding)
                                 .frame(width: w - 2, height: h - 2)
                                 .contentShape(Rectangle())
                                 .onTapGesture(count: 2) {

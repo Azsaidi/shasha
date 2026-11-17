@@ -16,11 +16,14 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.TextUtils
 import android.util.Rational
 import android.util.TypedValue
+import android.view.GestureDetector
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -65,6 +68,7 @@ import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.Store
 import com.azsaidi.shasha.data.WatchEntry
 import com.azsaidi.shasha.data.WatchKind
+import com.azsaidi.shasha.ui.formatDuration
 import com.azsaidi.shasha.ui.isTelevision
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -83,6 +87,11 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var resizeView: TextView
     private lateinit var sleepView: TextView
     private lateinit var curtain: View
+    private lateinit var skipBack: TextView
+    private lateinit var skipForward: TextView
+    private var skipSide = 0
+    private var skipTotal = 0
+    private var lastSkipAt = 0L
     private lateinit var titleCard: LinearLayout
     private lateinit var titleCardText: TextView
     private lateinit var upNextCard: LinearLayout
@@ -494,6 +503,11 @@ class PlayerActivity : ComponentActivity() {
         upNextCard.addView(upNextButtons)
 
         root.addView(playerView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        skipBack = skipBubble()
+        skipForward = skipBubble()
+        root.addView(skipBack, FrameLayout.LayoutParams(dp(150), dp(150), Gravity.CENTER_VERTICAL or Gravity.LEFT).apply { leftMargin = dp(56) })
+        root.addView(skipForward, FrameLayout.LayoutParams(dp(150), dp(150), Gravity.CENTER_VERTICAL or Gravity.RIGHT).apply { rightMargin = dp(56) })
+        setUpDoubleTap()
         root.addView(curtain, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(titleCard, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         root.addView(
@@ -504,6 +518,78 @@ class PlayerActivity : ComponentActivity() {
         )
         root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         setContentView(root)
+    }
+
+    /** Round bubble showing "◀◀ 10 sec" / "▶▶ 10 sec" after a double tap. */
+    private fun skipBubble() = TextView(this).apply {
+        gravity = Gravity.CENTER
+        setTextColor(Color.WHITE)
+        textSize = 17f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        textDirection = View.TEXT_DIRECTION_LTR
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(0x40FFFFFF)
+        }
+        alpha = 0f
+        visibility = View.GONE
+    }
+
+    /** Phones: double-tap the left third to go back 10 s, the right third to go forward. Repeated taps add up. */
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private fun setUpDoubleTap() {
+        val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                if (playerView.isControllerFullyVisible) playerView.hideController() else playerView.showController()
+                return true
+            }
+
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                val third = playerView.width / 3f
+                when {
+                    e.x < third -> skipBy(-1)
+                    e.x > playerView.width - third -> skipBy(1)
+                    else -> if (playerView.isControllerFullyVisible) playerView.hideController() else playerView.showController()
+                }
+                return true
+            }
+        })
+        playerView.setOnTouchListener { _, event -> detector.onTouchEvent(event) }
+    }
+
+    private fun skipBy(side: Int) {
+        val p = player ?: return
+        val item = items.getOrNull(p.currentMediaItemIndex) ?: return
+        if (item.isLive || p.duration == C.TIME_UNSET) return
+        p.seekTo((p.currentPosition + side * 10_000L).coerceIn(0L, p.duration))
+        val now = SystemClock.elapsedRealtime()
+        skipTotal = if (skipSide == side && now - lastSkipAt < 1_000) skipTotal + 10 else 10
+        skipSide = side
+        lastSkipAt = now
+        val bubble = if (side > 0) skipForward else skipBack
+        val other = if (side > 0) skipBack else skipForward
+        other.animate().cancel()
+        other.visibility = View.GONE
+        bubble.text = (if (side > 0) "▶▶" else "◀◀") + "\n" + formatDuration(this, skipTotal.toDouble())
+        bubble.animate().cancel()
+        if (bubble.visibility != View.VISIBLE) {
+            bubble.visibility = View.VISIBLE
+            bubble.alpha = 0f
+        }
+        bubble.scaleX = 0.85f
+        bubble.scaleY = 0.85f
+        bubble.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180)
+            .withEndAction {
+                bubble.animate().alpha(0f).setStartDelay(650).setDuration(300)
+                    .withEndAction {
+                        bubble.visibility = View.GONE
+                        skipSide = 0
+                    }
+                    .start()
+            }
+            .start()
     }
 
     private fun pillParams() =

@@ -29,8 +29,8 @@ final class PlayerModel: ObservableObject, Identifiable {
     @Published private(set) var engineVersion = 0
     /// What the person asked for (play or pause); drives the play/pause button.
     @Published private(set) var wantsPlay = true
-    /// Black screen while the player rotates away before closing.
-    @Published var hiding = false
+    /// True while the player turns upright before closing (controls hidden, picture kept).
+    @Published private(set) var hiding = false
 
     private let fromStart: Bool
     private var started = false
@@ -79,6 +79,17 @@ final class PlayerModel: ObservableObject, Identifiable {
             Task { @MainActor in self?.tick() }
         }
         showControls()
+    }
+
+    func prepareToClose() {
+        hiding = true
+        hideTask?.cancel()
+        controlsVisible = false
+        upNextRemaining = nil
+        announce = nil
+        track()
+        engine?.pause()
+        wantsPlay = false
     }
 
     func close() {

@@ -75,8 +75,13 @@ fun downloadStatusText(context: Context, status: DownloadStatus?, item: Download
         item == null -> context.getString(R.string.download_queued)
         else -> context.getString(R.string.dl_waiting_turn)
     }
-    DownloadState.RUNNING -> status.fraction?.let { context.getString(R.string.downloading_pct, (it * 100).toInt()) }
-        ?: context.getString(R.string.downloading)
+    DownloadState.RUNNING -> listOfNotNull(
+        status.fraction?.let { context.getString(R.string.downloading_pct, (it * 100).toInt()) }
+            ?: context.getString(R.string.downloading),
+        if (status.total > 0) "${formatBytes(status.bytes)} / ${formatBytes(status.total)}" else formatBytes(status.bytes),
+        status.speed.takeIf { it > 1 }?.let { "${formatBytes(it.toLong())}/s" },
+        status.eta?.let { context.getString(R.string.time_left, formatDuration(context, it)) },
+    ).joinToString(" · ")
     DownloadState.PAUSED -> if (!Downloads.canDownloadNow()) {
         context.getString(R.string.dl_waiting_stream)
     } else {
@@ -275,4 +280,19 @@ private fun DownloadRow(context: Context, item: DownloadItem, title: String, sub
             .clip(RoundedCornerShape(10.dp))
             .pressable(onClick = open, onLongClick = { showDownloadMenu(context, item) }),
     )
+}
+
+/** "1 hr, 5 min", "12 min", "40 sec" in the app's language. */
+fun formatDuration(context: Context, seconds: Double): String {
+    val s = seconds.toLong().coerceAtLeast(1)
+    val locale = context.resources.configuration.locales[0]
+    val format = android.icu.text.MeasureFormat.getInstance(locale, android.icu.text.MeasureFormat.FormatWidth.SHORT)
+    return when {
+        s >= 3600 -> format.formatMeasures(
+            android.icu.util.Measure(s / 3600, android.icu.util.MeasureUnit.HOUR),
+            android.icu.util.Measure((s % 3600) / 60, android.icu.util.MeasureUnit.MINUTE),
+        )
+        s >= 60 -> format.format(android.icu.util.Measure(s / 60, android.icu.util.MeasureUnit.MINUTE))
+        else -> format.format(android.icu.util.Measure(s, android.icu.util.MeasureUnit.SECOND))
+    }
 }

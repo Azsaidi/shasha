@@ -83,7 +83,12 @@ data class DownloadStatus(
     val total: Long,
     /** For failures: an HTTP status code, or one of the REASON_* values. */
     val reason: Int = 0,
+    /** Bytes per second while running (smoothed). */
+    val speed: Double = 0.0,
 ) {
+    /** Seconds left, when the size and speed are known. */
+    val eta: Double? get() = if (state == DownloadState.RUNNING && total > 0 && speed > 1) (total - bytes).coerceAtLeast(0) / speed else null
+
     /** 0..1, or null when the size isn't known yet. */
     val fraction: Float? get() = if (total > 0) (bytes.toFloat() / total).coerceIn(0f, 1f) else null
     val active: Boolean get() = state == DownloadState.QUEUED || state == DownloadState.RUNNING || state == DownloadState.PAUSED
@@ -269,14 +274,25 @@ object Downloads {
 
     // --- called by DownloadService (on the main thread) ---
 
+    private val samples = HashMap<String, Pair<Long, Long>>()
+
     internal fun markProgress(key: String, bytes: Long, total: Long) {
         val item = findByKey(key) ?: return
-        val next = DownloadStatus(DownloadState.RUNNING, bytes, total)
+        val now = android.os.SystemClock.elapsedRealtime()
+        var speed = status[key]?.takeIf { it.state == DownloadState.RUNNING }?.speed ?: 0.0
+        val last = samples[key]
+        if (last != null && now > last.first && bytes >= last.second) {
+            val instant = (bytes - last.second) * 1000.0 / (now - last.first)
+            speed = if (speed > 0) speed * 0.8 + instant * 0.2 else instant
+        }
+        samples[key] = now to bytes
+        val next = DownloadStatus(DownloadState.RUNNING, bytes, total, speed = speed)
         if (status[key] != next) status[key] = next
         if (total > 0 && item.total != total) replace(item.copy(total = total))
     }
 
     internal fun markPaused(key: String) {
+        samples.remove(key)
         val item = findByKey(key) ?: return
         status[key] = DownloadStatus(DownloadState.PAUSED, file(item)?.length() ?: 0, item.total)
     }

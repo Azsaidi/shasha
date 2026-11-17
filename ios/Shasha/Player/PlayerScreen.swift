@@ -90,12 +90,12 @@ struct PlayerScreen: View {
                     .allowsHitTesting(false)
             }
 
-            if model.controlsVisible || model.errorMessage != nil {
+            if !model.hiding && (model.controlsVisible || model.errorMessage != nil) {
                 controls
                     .transition(.opacity)
             }
 
-            if let message = model.errorMessage {
+            if !model.hiding, let message = model.errorMessage {
                 errorCard(message)
             }
 
@@ -112,11 +112,7 @@ struct PlayerScreen: View {
                     .allowsHitTesting(false)
             }
 
-            ToastOverlay()
-
-            if model.hiding {
-                Color.black.ignoresSafeArea()
-            }
+            if !model.hiding { ToastOverlay() }
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
