@@ -118,6 +118,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.azsaidi.shasha.BuildConfig
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.SystemUpdate
+import com.azsaidi.shasha.data.Updater
 import com.azsaidi.shasha.R
 import com.azsaidi.shasha.data.Category
 import com.azsaidi.shasha.data.ContentType
@@ -1264,6 +1267,7 @@ private fun SettingsTab(
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.remove_account))
         }
+        UpdateSection()
         Text(
             stringResource(R.string.version_line, BuildConfig.VERSION_NAME),
             style = MaterialTheme.typography.bodySmall,
@@ -1368,5 +1372,101 @@ private fun InfoLine(label: String, value: String) {
             modifier = Modifier.width(110.dp),
         )
         Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** "Check for updates": looks at the latest GitHub release and installs it over this app (data is kept). */
+@Composable
+private fun UpdateSection() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var job by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val state = Updater.state
+
+    OutlinedButton(
+        onClick = { job = scope.launch { Updater.check() } },
+        enabled = state !is Updater.State.Checking && state !is Updater.State.Downloading,
+        modifier = Modifier.fillMaxWidth().focusRing(ButtonShape),
+    ) {
+        if (state is Updater.State.Checking) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+        } else {
+            Icon(Icons.Filled.SystemUpdate, contentDescription = null)
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(stringResource(if (state is Updater.State.Checking) R.string.checking_updates else R.string.check_updates))
+    }
+    when (state) {
+        is Updater.State.UpToDate -> Text(
+            stringResource(R.string.up_to_date, state.version),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.secondary,
+        )
+        is Updater.State.Failed -> Text(
+            stringResource(R.string.update_failed, state.message),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        else -> Unit
+    }
+
+    when (state) {
+        is Updater.State.Available -> AlertDialog(
+            onDismissRequest = { Updater.dismiss() },
+            icon = { Icon(Icons.Filled.SystemUpdate, contentDescription = null) },
+            title = { Text(stringResource(R.string.update_available)) },
+            text = { Text(stringResource(R.string.update_available_body, state.release.version, Updater.currentVersion)) },
+            confirmButton = {
+                TextButton(
+                    onClick = { job = scope.launch { Updater.download(context.applicationContext, state.release) } },
+                    modifier = Modifier.focusRing(ButtonShape),
+                ) { Text(stringResource(R.string.update_install)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { Updater.dismiss() }, modifier = Modifier.focusRing(ButtonShape)) {
+                    Text(stringResource(R.string.update_later))
+                }
+            },
+        )
+        is Updater.State.Downloading -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text(stringResource(R.string.update_available)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.update_downloading, ((state.fraction ?: 0f) * 100).toInt()))
+                    val fraction = state.fraction
+                    if (fraction != null) {
+                        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        job?.cancel()
+                        Updater.dismiss()
+                    },
+                    modifier = Modifier.focusRing(ButtonShape),
+                ) { Text(stringResource(R.string.cancel)) }
+            },
+        )
+        is Updater.State.NeedsPermission -> AlertDialog(
+            onDismissRequest = { Updater.dismiss() },
+            title = { Text(stringResource(R.string.update_permission_title)) },
+            text = { Text(stringResource(R.string.update_permission_body)) },
+            confirmButton = {
+                TextButton(onClick = { Updater.install(context, state.file) }, modifier = Modifier.focusRing(ButtonShape)) {
+                    Text(stringResource(R.string.install))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { Updater.openInstallPermission(context) }, modifier = Modifier.focusRing(ButtonShape)) {
+                    Text(stringResource(R.string.open_settings))
+                }
+            },
+        )
+        else -> Unit
     }
 }

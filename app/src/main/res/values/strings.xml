@@ -282,4 +282,17 @@
     <string name="dl_retrying">Failed, trying again shortly…</string>
     <string name="now_playing">Now playing</string>
     <string name="open_series">Go to series</string>
+    <string name="check_updates">Check for updates</string>
+    <string name="checking_updates">Checking for updates…</string>
+    <string name="up_to_date">You’re on the latest version (%1$s).</string>
+    <string name="update_available">Update available</string>
+    <string name="update_available_body">Version %1$s is available (you have %2$s). Your playlists, favourites, history and downloads are kept.</string>
+    <string name="update_install">Download and install</string>
+    <string name="update_later">Later</string>
+    <string name="update_downloading">Downloading the update… %1$d%%</string>
+    <string name="update_permission_title">Allow installing updates</string>
+    <string name="update_permission_body">Android needs your permission for Shasha to install updates. Tap Open settings, turn on “Allow from this source”, come back and tap Install.</string>
+    <string name="install">Install</string>
+    <string name="open_settings">Open settings</string>
+    <string name="update_failed">Couldn’t check for updates (%1$s).</string>
 </resources>

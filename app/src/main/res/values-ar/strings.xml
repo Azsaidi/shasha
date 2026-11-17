@@ -283,4 +283,17 @@
     <string name="dl_retrying">فشل، ستتم إعادة المحاولة قريبًا…</string>
     <string name="now_playing">قيد التشغيل الآن</string>
     <string name="open_series">الذهاب إلى المسلسل</string>
+    <string name="check_updates">التحقق من التحديثات</string>
+    <string name="checking_updates">جارٍ التحقق من التحديثات…</string>
+    <string name="up_to_date">لديك أحدث إصدار (%1$s).</string>
+    <string name="update_available">يتوفر تحديث</string>
+    <string name="update_available_body">الإصدار %1$s متاح (لديك %2$s). ستبقى قوائم التشغيل والمفضلة والسجل والتنزيلات كما هي.</string>
+    <string name="update_install">تنزيل وتثبيت</string>
+    <string name="update_later">لاحقًا</string>
+    <string name="update_downloading">جارٍ تنزيل التحديث… %1$d%%</string>
+    <string name="update_permission_title">السماح بتثبيت التحديثات</string>
+    <string name="update_permission_body">يحتاج Android إلى إذنك لكي يثبّت شاشة التحديثات. اضغط فتح الإعدادات، وفعّل «السماح من هذا المصدر»، ثم عد واضغط تثبيت.</string>
+    <string name="install">تثبيت</string>
+    <string name="open_settings">فتح الإعدادات</string>
+    <string name="update_failed">تعذّر التحقق من التحديثات (%1$s).</string>
 </resources>
