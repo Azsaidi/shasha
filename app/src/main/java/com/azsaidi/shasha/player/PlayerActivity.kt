@@ -58,6 +58,7 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.azsaidi.shasha.R
@@ -80,6 +81,8 @@ import java.util.Date
 class PlayerActivity : ComponentActivity() {
 
     private var player: ExoPlayer? = null
+    /** Tells the system what's playing (headphone/Bluetooth buttons, car displays, Google TV). */
+    private var mediaSession: MediaSession? = null
     private lateinit var playerView: PlayerView
     private lateinit var topBar: LinearLayout
     private lateinit var titleView: TextView
@@ -715,7 +718,13 @@ class PlayerActivity : ComponentActivity() {
     private fun mediaItem(item: PlayItem, url: String): MediaItem {
         val builder = MediaItem.Builder()
             .setUri(url)
-            .setMediaMetadata(MediaMetadata.Builder().setTitle(item.title).build())
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(item.title)
+                    .setArtist(item.subtitle)
+                    .apply { item.image?.let { runCatching { setArtworkUri(android.net.Uri.parse(it)) } } }
+                    .build()
+            )
         if (url.endsWith(".m3u8", ignoreCase = true)) builder.setMimeType(MimeTypes.APPLICATION_M3U8)
         return builder.build()
     }
@@ -763,6 +772,10 @@ class PlayerActivity : ComponentActivity() {
         exo.playWhenReady = true
 
         playerView.player = exo
+        mediaSession?.release()
+        mediaSession = runCatching {
+            MediaSession.Builder(this, exo).setId("shasha-${System.nanoTime()}").build()
+        }.getOrNull()
         player = exo
         // Downloads wait while we stream on plans that allow only one connection.
         Downloads.setStreaming(items.any { it.url.startsWith("http") })
@@ -779,6 +792,8 @@ class PlayerActivity : ComponentActivity() {
         saveCurrent()
         startIndex = p.currentMediaItemIndex.coerceIn(0, items.lastIndex)
         p.removeListener(listener)
+        mediaSession?.release()
+        mediaSession = null
         p.release()
         player = null
         Downloads.setStreaming(false)
