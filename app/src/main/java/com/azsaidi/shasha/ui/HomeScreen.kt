@@ -1,5 +1,6 @@
 package com.azsaidi.shasha.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,7 +18,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -30,16 +33,18 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -61,6 +66,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -96,8 +102,7 @@ import com.azsaidi.shasha.data.Library
 import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.Store
 import com.azsaidi.shasha.data.StreamItem
-import com.azsaidi.shasha.player.PlayItem
-import com.azsaidi.shasha.player.launchPlayer
+import com.azsaidi.shasha.player.Playback
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -105,16 +110,23 @@ import java.util.Date
 import java.util.Locale
 
 private enum class HomeTab(val label: String, val icon: ImageVector) {
+    HOME("Home", Icons.Filled.Home),
     LIVE("Live TV", Icons.Filled.LiveTv),
     MOVIES("Movies", Icons.Filled.Movie),
     SERIES("Series", Icons.Filled.VideoLibrary),
-    FAVORITES("Favorites", Icons.Filled.Favorite),
-    ACCOUNT("Account", Icons.Filled.AccountCircle),
+    SETTINGS("Settings", Icons.Filled.Settings),
+}
+
+enum class SortOrder(val label: String) {
+    DEFAULT("Provider order"),
+    ADDED("Recently added"),
+    NAME("A–Z"),
+    RATING("Top rated"),
 }
 
 internal val ButtonShape = RoundedCornerShape(24.dp)
-private val FavoriteYellow = Color(0xFFFFC107)
-private val FavoritePink = Color(0xFFFF5A79)
+internal val FavoriteYellow = Color(0xFFFFC107)
+internal val FavoritePink = Color(0xFFFF5A79)
 
 @Composable
 fun HomeScreen(
@@ -124,22 +136,14 @@ fun HomeScreen(
     onAccountRemoved: () -> Unit,
 ) {
     val context = LocalContext.current
-    var tab by rememberSaveable { mutableStateOf(HomeTab.LIVE) }
+    var tab by rememberSaveable { mutableStateOf(HomeTab.HOME) }
     val holder = rememberSaveableStateHolder()
 
     val open: (StreamItem, List<StreamItem>) -> Unit = { item, list ->
         when (item.type) {
             ContentType.LIVE -> {
-                val api = Session.api
-                if (api != null) {
-                    val ext = Session.liveExtension()
-                    val channels = list.filter { it.type == ContentType.LIVE }
-                    launchPlayer(
-                        context,
-                        channels.map { PlayItem(it.name, api.liveUrl(it.id, ext), isLive = true) },
-                        channels.indexOf(item),
-                    )
-                }
+                val channels = list.filter { it.type == ContentType.LIVE }
+                Playback.channels(context, channels, channels.indexOf(item).coerceAtLeast(0))
             }
             ContentType.MOVIE -> onOpenMovie(item.id)
             ContentType.SERIES -> onOpenSeries(item.id)
@@ -153,11 +157,11 @@ fun HomeScreen(
     val content: @Composable () -> Unit = {
         holder.SaveableStateProvider(tab.name) {
             when (tab) {
+                HomeTab.HOME -> HomePage(open)
                 HomeTab.LIVE -> ContentTab(ContentType.LIVE, open)
                 HomeTab.MOVIES -> ContentTab(ContentType.MOVIE, open)
                 HomeTab.SERIES -> ContentTab(ContentType.SERIES, open)
-                HomeTab.FAVORITES -> FavoritesTab(open)
-                HomeTab.ACCOUNT -> AccountTab(onSwitchAccount, onAccountRemoved)
+                HomeTab.SETTINGS -> SettingsTab(onSwitchAccount, onAccountRemoved)
             }
         }
     }
@@ -229,6 +233,12 @@ fun HomeScreen(
     }
 }
 
+/** Throws away cached lists and downloads them again. */
+internal fun refreshContent(context: android.content.Context) {
+    Session.refreshAll()
+    Toast.makeText(context, "Refreshing channels, movies and series…", Toast.LENGTH_SHORT).show()
+}
+
 @Composable
 private fun ContentTab(type: ContentType, onOpen: (StreamItem, List<StreamItem>) -> Unit) {
     var state by remember(type) {
@@ -256,8 +266,19 @@ private fun ContentTab(type: ContentType, onOpen: (StreamItem, List<StreamItem>)
     when (val s = state) {
         is Load.Loading -> LoadingView("Loading ${type.noun}…")
         is Load.Failed -> MessageView("Couldn't load ${type.noun}", s.message, "Try again") { retry++ }
-        is Load.Ready -> Browser(type, s.value.first, s.value.second, onOpen)
+        is Load.Ready -> {
+            val hideAdult = Session.hideAdult
+            val library = remember(s.value, hideAdult) { Session.visible(s.value) }
+            Browser(type, library.first, library.second, onOpen)
+        }
     }
+}
+
+internal fun List<StreamItem>.ordered(order: SortOrder): List<StreamItem> = when (order) {
+    SortOrder.DEFAULT -> this
+    SortOrder.ADDED -> sortedByDescending { it.added ?: 0L }
+    SortOrder.NAME -> sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+    SortOrder.RATING -> sortedByDescending { it.rating?.toDoubleOrNull() ?: 0.0 }
 }
 
 @Composable
@@ -267,8 +288,10 @@ private fun Browser(
     items: List<StreamItem>,
     onOpen: (StreamItem, List<StreamItem>) -> Unit,
 ) {
+    val context = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
     var categoryId by rememberSaveable { mutableStateOf("") }
+    var sort by rememberSaveable { mutableStateOf(SortOrder.DEFAULT) }
     var showCategories by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     val isTv = rememberIsTv()
@@ -276,16 +299,22 @@ private fun Browser(
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
 
+    val sortOptions = if (type == ContentType.LIVE) {
+        listOf(SortOrder.DEFAULT, SortOrder.NAME)
+    } else {
+        listOf(SortOrder.DEFAULT, SortOrder.ADDED, SortOrder.NAME, SortOrder.RATING)
+    }
+
     val counts = remember(items) { items.groupingBy { it.categoryId ?: "" }.eachCount() }
     val categoryList = remember(categories, counts) {
         categories.mapNotNull { c -> counts[c.id]?.let { c to it } }
     }
-    val filtered = remember(items, query, categoryId) {
+    val filtered = remember(items, query, categoryId, sort) {
         val q = query.trim()
         items.filter {
             (categoryId.isEmpty() || it.categoryId == categoryId) &&
                 (q.isEmpty() || it.name.contains(q, ignoreCase = true))
-        }
+        }.ordered(sort)
     }
     val categoryName = categories.firstOrNull { it.id == categoryId }?.name ?: "All ${type.noun}"
 
@@ -316,48 +345,67 @@ private fun Browser(
                     .padding(start = 12.dp, end = 12.dp, top = 8.dp),
             )
         }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = if (isTv) 8.dp else 0.dp),
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = if (isTv) 8.dp else 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (isTv) {
                 // A text field would pop the TV keyboard every time focus passed over it,
                 // so on TV search opens in a dialog instead.
-                FilterChip(
-                    selected = query.isNotEmpty(),
-                    onClick = { showSearch = true },
-                    label = { Text(query.ifEmpty { "Search" }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    modifier = Modifier.focusRing(RoundedCornerShape(8.dp)),
-                )
+                item {
+                    FilterChip(
+                        selected = query.isNotEmpty(),
+                        onClick = { showSearch = true },
+                        label = { Text(query.ifEmpty { "Search" }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        modifier = Modifier.focusRing(RoundedCornerShape(8.dp)),
+                    )
+                }
                 if (query.isNotEmpty()) {
-                    IconButton(
-                        onClick = { query = ""; scrollTop() },
-                        modifier = Modifier.focusRing(CircleShape),
-                    ) {
-                        Icon(Icons.Filled.Close, contentDescription = "Clear search")
+                    item {
+                        IconButton(onClick = { query = ""; scrollTop() }, modifier = Modifier.focusRing(CircleShape)) {
+                            Icon(Icons.Filled.Close, contentDescription = "Clear search")
+                        }
                     }
                 }
-                Spacer(Modifier.width(8.dp))
             }
-            FilterChip(
-                selected = categoryId.isNotEmpty(),
-                onClick = { showCategories = true },
-                label = { Text(categoryName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                leadingIcon = { Icon(Icons.Filled.FilterList, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) },
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .focusRing(RoundedCornerShape(8.dp)),
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                "${filtered.size}",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            item {
+                FilterChip(
+                    selected = categoryId.isNotEmpty(),
+                    onClick = { showCategories = true },
+                    label = {
+                        Text(categoryName, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
+                    },
+                    leadingIcon = { Icon(Icons.Filled.FilterList, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) },
+                    modifier = Modifier.focusRing(RoundedCornerShape(8.dp)),
+                )
+            }
+            item {
+                FilterChip(
+                    selected = sort != SortOrder.DEFAULT,
+                    onClick = {
+                        sort = sortOptions[(sortOptions.indexOf(sort) + 1) % sortOptions.size]
+                        scrollTop()
+                    },
+                    label = { Text(sort.label, maxLines = 1) },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.focusRing(RoundedCornerShape(8.dp)),
+                )
+            }
+            item {
+                IconButton(onClick = { refreshContent(context) }, modifier = Modifier.focusRing(CircleShape)) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Refresh ${type.noun}")
+                }
+            }
+            item {
+                Text(
+                    "${filtered.size}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
         if (filtered.isEmpty()) {
@@ -415,7 +463,7 @@ private fun Browser(
 }
 
 @Composable
-private fun SearchDialog(initial: String, hint: String, onSearch: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun SearchDialog(initial: String, hint: String, onSearch: (String) -> Unit, onDismiss: () -> Unit) {
     var text by remember { mutableStateOf(initial) }
     val focus = remember { FocusRequester() }
     AlertDialog(
@@ -519,7 +567,7 @@ private fun CategoryRow(name: String, count: Int, selected: Boolean, onClick: ()
 }
 
 @Composable
-private fun LiveRow(item: StreamItem, onClick: () -> Unit) {
+internal fun LiveRow(item: StreamItem, onClick: () -> Unit) {
     val favorite = Session.isFavorite(item)
     ListItem(
         headlineContent = { Text(item.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
@@ -544,10 +592,10 @@ private fun LiveRow(item: StreamItem, onClick: () -> Unit) {
 }
 
 @Composable
-private fun PosterCard(item: StreamItem, onClick: () -> Unit) {
+internal fun PosterCard(item: StreamItem, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val favorite = Session.isFavorite(item)
     Column(
-        Modifier
+        modifier
             .focusRing(RoundedCornerShape(12.dp), focusedScale = 1.06f)
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
@@ -599,57 +647,8 @@ private fun PosterCard(item: StreamItem, onClick: () -> Unit) {
 }
 
 @Composable
-private fun FavoritesTab(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
-    val favorites = Session.favorites
-    if (favorites.isEmpty()) {
-        MessageView(
-            "No favorites yet",
-            "Tap the star next to a channel, or the heart on a movie or series, to keep it here.",
-        )
-        return
-    }
-    LazyColumn(Modifier.fillMaxSize()) {
-        for (type in ContentType.entries) {
-            val group = favorites.filter { it.type == type }
-            if (group.isEmpty()) continue
-            item(key = "header-${type.name}") {
-                Text(
-                    type.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp),
-                )
-            }
-            items(group, key = { "${it.type}-${it.id}" }) { item ->
-                ListItem(
-                    headlineContent = { Text(item.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                    leadingContent = {
-                        if (type == ContentType.LIVE) {
-                            Thumb(item.icon, item.name, Modifier.size(width = 64.dp, height = 44.dp))
-                        } else {
-                            Thumb(item.icon, item.name, Modifier.size(width = 44.dp, height = 66.dp), crop = true)
-                        }
-                    },
-                    trailingContent = {
-                        IconButton(
-                            onClick = { Session.toggleFavorite(item) },
-                            modifier = Modifier.focusRing(CircleShape),
-                        ) {
-                            Icon(Icons.Filled.Close, contentDescription = "Remove from favorites")
-                        }
-                    },
-                    modifier = Modifier
-                        .focusRing(RoundedCornerShape(10.dp))
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { onOpen(item, group) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun AccountTab(onSwitchAccount: () -> Unit, onAccountRemoved: () -> Unit) {
+private fun SettingsTab(onSwitchAccount: () -> Unit, onAccountRemoved: () -> Unit) {
+    val context = LocalContext.current
     val account = Session.account
     if (account == null) {
         MessageView("No account open", null, "Choose account", onSwitchAccount)
@@ -657,6 +656,7 @@ private fun AccountTab(onSwitchAccount: () -> Unit, onAccountRemoved: () -> Unit
     }
     val auth = Session.auth
     var format by remember { mutableStateOf(Store.liveFormat) }
+    var autoPip by remember { mutableStateOf(Store.autoPip) }
     var confirmRemove by remember { mutableStateOf(false) }
 
     Column(
@@ -690,6 +690,22 @@ private fun AccountTab(onSwitchAccount: () -> Unit, onAccountRemoved: () -> Unit
             }
         }
 
+        SettingSwitch(
+            title = "Hide adult categories",
+            description = "Hides categories and titles marked adult, XXX or 18+.",
+            checked = Session.hideAdult,
+            onChange = { Session.updateHideAdult(it) },
+        )
+        SettingSwitch(
+            title = "Picture-in-picture when leaving",
+            description = "Keep the video playing in a small window when you go home during playback.",
+            checked = autoPip,
+            onChange = {
+                autoPip = it
+                Store.autoPip = it
+            },
+        )
+
         Text("Live channel format", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("auto" to "Auto", "ts" to "TS", "m3u8" to "HLS").forEach { (value, label) ->
@@ -711,10 +727,10 @@ private fun AccountTab(onSwitchAccount: () -> Unit, onAccountRemoved: () -> Unit
         )
 
         Spacer(Modifier.size(4.dp))
-        OutlinedButton(onClick = { Session.clearCache() }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
+        OutlinedButton(onClick = { refreshContent(context) }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
             Icon(Icons.Filled.Refresh, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Reload channels and library")
+            Text("Refresh channels, movies and series")
         }
         OutlinedButton(onClick = onSwitchAccount, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
             Icon(Icons.Filled.SwapHoriz, contentDescription = null)
@@ -742,7 +758,7 @@ private fun AccountTab(onSwitchAccount: () -> Unit, onAccountRemoved: () -> Unit
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
             title = { Text("Remove ${account.name}?") },
-            text = { Text("Its login details and favorites will be deleted from this phone.") },
+            text = { Text("Its login details, favorites and watch history will be deleted from this device.") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmRemove = false
@@ -753,6 +769,26 @@ private fun AccountTab(onSwitchAccount: () -> Unit, onAccountRemoved: () -> Unit
             },
             dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel") } },
         )
+    }
+}
+
+@Composable
+private fun SettingSwitch(title: String, description: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .focusRing(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onChange(!checked) }
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 

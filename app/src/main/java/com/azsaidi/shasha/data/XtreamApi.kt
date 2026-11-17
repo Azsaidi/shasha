@@ -1,6 +1,7 @@
 package com.azsaidi.shasha.data
 
 import android.net.Uri
+import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
@@ -91,6 +92,7 @@ class XtreamApi(private val account: Account) {
                     type = type,
                     extension = null,
                     rating = o.str("rating"),
+                    added = o.str("last_modified")?.toLongOrNull(),
                 )
             } else {
                 StreamItem(
@@ -101,6 +103,7 @@ class XtreamApi(private val account: Account) {
                     type = type,
                     extension = o.str("container_extension"),
                     rating = o.str("rating"),
+                    added = o.str("added")?.toLongOrNull(),
                 )
             }
             out.add(item)
@@ -180,6 +183,31 @@ class XtreamApi(private val account: Account) {
             rating = info.str("rating"),
             seasons = seasons,
         )
+    }
+
+    /** Now/next programme info for one live channel. Returns an empty list if the provider has none. */
+    suspend fun shortEpg(streamId: String): List<EpgEntry> = withContext(Dispatchers.IO) {
+        val json = try {
+            fetchObject(apiUrl("get_short_epg", mapOf("stream_id" to streamId, "limit" to "4")))
+        } catch (e: IOException) {
+            return@withContext emptyList()
+        }
+        val arr = json.optJSONArray("epg_listings") ?: return@withContext emptyList()
+        val out = ArrayList<EpgEntry>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val title = decodeBase64(o.str("title")) ?: continue
+            val start = o.str("start_timestamp")?.toLongOrNull() ?: continue
+            val end = (o.str("stop_timestamp") ?: o.str("end_timestamp"))?.toLongOrNull() ?: continue
+            out.add(EpgEntry(title, start * 1000, end * 1000))
+        }
+        out.sortedBy { it.start }
+    }
+
+    private fun decodeBase64(value: String?): String? {
+        if (value == null) return null
+        val decoded = runCatching { String(Base64.decode(value, Base64.DEFAULT), Charsets.UTF_8) }.getOrDefault(value)
+        return decoded.trim().ifEmpty { null }
     }
 
     private fun apiUrl(action: String? = null, extra: Map<String, String> = emptyMap()): HttpUrl {

@@ -46,7 +46,8 @@ object Store {
 
     fun removeAccount(id: String) {
         saveAccounts(accounts().filter { it.id != id })
-        prefs.edit().remove("fav:$id").apply()
+        prefs.edit().remove("fav:$id").remove("history:$id").apply()
+        CatalogCache.clear(id)
         if (lastAccountId == id) lastAccountId = null
     }
 
@@ -59,6 +60,15 @@ object Store {
         get() = prefs.getString("live_format", null) ?: "auto"
         set(value) = prefs.edit().putString("live_format", value).apply()
 
+    var hideAdult: Boolean
+        get() = prefs.getBoolean("hide_adult", false)
+        set(value) = prefs.edit().putBoolean("hide_adult", value).apply()
+
+    /** Go to picture-in-picture when leaving the app during playback. */
+    var autoPip: Boolean
+        get() = prefs.getBoolean("auto_pip", true)
+        set(value) = prefs.edit().putBoolean("auto_pip", value).apply()
+
     fun favorites(accountId: String): List<StreamItem> = runCatching {
         val arr = JSONArray(prefs.getString("fav:$accountId", null) ?: "[]")
         (0 until arr.length()).map { StreamItem.fromJson(arr.getJSONObject(it)) }
@@ -70,10 +80,14 @@ object Store {
         prefs.edit().putString("fav:$accountId", arr.toString()).apply()
     }
 
-    fun position(key: String): Long = prefs.getLong("pos:$key", 0L)
+    fun history(accountId: String): List<WatchEntry> = runCatching {
+        val arr = JSONArray(prefs.getString("history:$accountId", null) ?: "[]")
+        (0 until arr.length()).mapNotNull { WatchEntry.fromJson(arr.getJSONObject(it)) }
+    }.getOrDefault(emptyList())
 
-    fun savePosition(key: String, positionMs: Long) {
-        if (positionMs <= 0) prefs.edit().remove("pos:$key").apply()
-        else prefs.edit().putLong("pos:$key", positionMs).apply()
+    fun saveHistory(accountId: String, entries: List<WatchEntry>) {
+        val arr = JSONArray()
+        entries.forEach { arr.put(it.toJson()) }
+        prefs.edit().putString("history:$accountId", arr.toString()).apply()
     }
 }

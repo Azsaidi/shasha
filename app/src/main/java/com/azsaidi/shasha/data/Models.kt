@@ -26,6 +26,8 @@ data class StreamItem(
     val type: ContentType,
     val extension: String?,
     val rating: String?,
+    /** Unix seconds when the provider added (or last updated) this item. */
+    val added: Long? = null,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -35,6 +37,7 @@ data class StreamItem(
         .put("type", type.name)
         .put("extension", extension ?: "")
         .put("rating", rating ?: "")
+        .put("added", added ?: 0L)
 
     companion object {
         fun fromJson(o: JSONObject) = StreamItem(
@@ -45,6 +48,7 @@ data class StreamItem(
             type = runCatching { ContentType.valueOf(o.optString("type")) }.getOrDefault(ContentType.LIVE),
             extension = o.optString("extension").ifBlank { null },
             rating = o.optString("rating").ifBlank { null },
+            added = o.optLong("added", 0L).takeIf { it > 0 },
         )
     }
 }
@@ -92,6 +96,70 @@ data class VodInfo(
     val cast: String?,
     val extension: String?,
 )
+
+data class EpgEntry(val title: String, val start: Long, val end: Long)
+
+enum class WatchKind(val prefix: String) { LIVE("live"), MOVIE("movie"), EPISODE("ep") }
+
+/** One row of watch history: what was played, where it stopped, and enough to play it again. */
+data class WatchEntry(
+    val kind: WatchKind,
+    val streamId: String,
+    val title: String,
+    val subtitle: String? = null,
+    val image: String? = null,
+    val extension: String? = null,
+    val seriesId: String? = null,
+    val seriesName: String? = null,
+    val position: Long = 0,
+    val duration: Long = 0,
+    val finished: Boolean = false,
+    /** Set on the episode after one that was finished, so it shows as "Up next". */
+    val upNext: Boolean = false,
+    val updatedAt: Long = System.currentTimeMillis(),
+) {
+    val key: String get() = keyOf(kind, streamId)
+    val progress: Float get() = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+    val resumable: Boolean get() = kind != WatchKind.LIVE && !finished && (position > 10_000 || upNext)
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("kind", kind.name)
+        .put("id", streamId)
+        .put("title", title)
+        .put("subtitle", subtitle ?: "")
+        .put("image", image ?: "")
+        .put("ext", extension ?: "")
+        .put("seriesId", seriesId ?: "")
+        .put("seriesName", seriesName ?: "")
+        .put("pos", position)
+        .put("dur", duration)
+        .put("finished", finished)
+        .put("upNext", upNext)
+        .put("at", updatedAt)
+
+    companion object {
+        fun keyOf(kind: WatchKind, streamId: String) = "${kind.prefix}:$streamId"
+
+        fun fromJson(o: JSONObject): WatchEntry? {
+            val kind = runCatching { WatchKind.valueOf(o.optString("kind")) }.getOrNull() ?: return null
+            return WatchEntry(
+                kind = kind,
+                streamId = o.optString("id").ifBlank { return null },
+                title = o.optString("title"),
+                subtitle = o.optString("subtitle").ifBlank { null },
+                image = o.optString("image").ifBlank { null },
+                extension = o.optString("ext").ifBlank { null },
+                seriesId = o.optString("seriesId").ifBlank { null },
+                seriesName = o.optString("seriesName").ifBlank { null },
+                position = o.optLong("pos"),
+                duration = o.optLong("dur"),
+                finished = o.optBoolean("finished"),
+                upNext = o.optBoolean("upNext"),
+                updatedAt = o.optLong("at"),
+            )
+        }
+    }
+}
 
 /** Reads a string field, treating missing, JSON null, "null" and blank values as null. */
 internal fun JSONObject.str(key: String): String? {

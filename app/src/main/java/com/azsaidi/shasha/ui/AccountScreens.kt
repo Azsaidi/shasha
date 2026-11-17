@@ -4,6 +4,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -87,51 +89,18 @@ fun LoginScreen(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val isTv = rememberIsTv()
 
     fun submit() {
         if (loading) return
-        var user = username.trim()
-        var pass = password
-        val raw = server.trim()
-
-        // Accept a full M3U link (get.php?username=...&password=...) and pull the login out of it.
-        val parsed = (if (raw.contains("://")) raw else "http://$raw").toHttpUrlOrNull()
-        if (parsed != null) {
-            if (user.isEmpty()) parsed.queryParameter("username")?.let { user = it }
-            if (pass.isEmpty()) parsed.queryParameter("password")?.let { pass = it }
-        }
-
-        val normalized = XtreamApi.normalizeServer(raw)
-        if (normalized == null) {
-            error = "Enter the server address your provider gave you"
-            return
-        }
-        if (user.isEmpty() || pass.isEmpty()) {
-            error = "Enter your username and password"
-            return
-        }
-
-        val account = Account(
-            id = UUID.randomUUID().toString(),
-            name = name.trim().ifEmpty { parsed?.host ?: "My playlist" },
-            server = normalized,
-            username = user,
-            password = pass,
-        )
         loading = true
         error = null
         scope.launch {
-            try {
-                val auth = XtreamApi(account).login()
-                Store.addAccount(account)
-                onLoggedIn(account, auth)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                error = friendlyError(e)
-            } finally {
-                loading = false
+            when (val result = performLogin(name, username, password, server)) {
+                is LoginResult.Success -> onLoggedIn(result.account, result.auth)
+                is LoginResult.Error -> error = result.message
             }
+            loading = false
         }
     }
 
@@ -150,10 +119,23 @@ fun LoginScreen(
             }
         },
     ) { padding ->
+      Row(
+          Modifier
+              .padding(padding)
+              .fillMaxSize()
+      ) {
+        if (isTv) {
+            PhoneLoginPanel(
+                onLoggedIn = onLoggedIn,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+            )
+        }
         Column(
             Modifier
-                .padding(padding)
-                .fillMaxSize()
+                .weight(1f)
+                .fillMaxHeight()
                 .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 16.dp),
@@ -251,6 +233,47 @@ fun LoginScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+      }
+    }
+}
+
+internal sealed class LoginResult {
+    data class Success(val account: Account, val auth: AuthInfo) : LoginResult()
+    data class Error(val message: String) : LoginResult()
+}
+
+/** Checks the details with the provider and saves the account if they work. */
+internal suspend fun performLogin(name: String, username: String, password: String, server: String): LoginResult {
+    var user = username.trim()
+    var pass = password
+    val raw = server.trim()
+
+    // Accept a full M3U link (get.php?username=...&password=...) and pull the login out of it.
+    val parsed = (if (raw.contains("://")) raw else "http://$raw").toHttpUrlOrNull()
+    if (parsed != null) {
+        if (user.isEmpty()) parsed.queryParameter("username")?.let { user = it }
+        if (pass.isEmpty()) parsed.queryParameter("password")?.let { pass = it }
+    }
+
+    val normalized = XtreamApi.normalizeServer(raw)
+        ?: return LoginResult.Error("Enter the server address your provider gave you")
+    if (user.isEmpty() || pass.isEmpty()) return LoginResult.Error("Enter your username and password")
+
+    val account = Account(
+        id = UUID.randomUUID().toString(),
+        name = name.trim().ifEmpty { parsed?.host ?: "My playlist" },
+        server = normalized,
+        username = user,
+        password = pass,
+    )
+    return try {
+        val auth = XtreamApi(account).login()
+        Store.addAccount(account)
+        LoginResult.Success(account, auth)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        LoginResult.Error(friendlyError(e))
     }
 }
 
