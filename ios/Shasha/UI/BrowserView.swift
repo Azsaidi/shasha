@@ -328,6 +328,7 @@ struct CategoryPicker: View {
                     row(c.name, count: counts[c.id] ?? 0, isSelected: selected == c.id) { selected = c.id }
                 }
             }
+            .scrollDismissesKeyboard(.immediately)
             .searchable(text: $filter, prompt: L("find_category"))
             .navigationTitle(L("categories"))
             .navigationBarTitleDisplayMode(.inline)

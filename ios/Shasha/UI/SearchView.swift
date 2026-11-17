@@ -27,6 +27,7 @@ struct SearchView: View {
             }
             .padding(.vertical, 12)
         }
+        .scrollDismissesKeyboard(.immediately)
         .screenBackground()
         .navigationTitle(L("search"))
         .navigationBarTitleDisplayMode(.inline)

@@ -164,7 +164,10 @@ struct LoginView: View {
     @State private var showPassword = false
     @State private var busy = false
     @State private var error: String?
+    @FocusState private var focus: Field?
     @Environment(\.dismiss) private var dismiss
+
+    private enum Field: Hashable { case name, server, username, password }
 
     init(existing: Account?, onDone: @escaping (Account) -> Void) {
         self.existing = existing
@@ -193,15 +196,24 @@ struct LoginView: View {
             Section {
                 TextField(L("playlist_name"), text: $name)
                     .textContentType(.name)
+                    .focused($focus, equals: .name)
+                    .submitLabel(.next)
+                    .onSubmit { focus = .server }
                 TextField(L("server_field"), text: $server, prompt: Text(L("server_placeholder")))
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .environment(\.layoutDirection, .leftToRight)
+                    .focused($focus, equals: .server)
+                    .submitLabel(.next)
+                    .onSubmit { focus = .username }
                 TextField(L("username"), text: $username)
                     .textContentType(.username)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .focused($focus, equals: .username)
+                    .submitLabel(.next)
+                    .onSubmit { focus = .password }
                 HStack {
                     Group {
                         if showPassword {
@@ -213,6 +225,9 @@ struct LoginView: View {
                     .textContentType(.password)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .focused($focus, equals: .password)
+                    .submitLabel(.go)
+                    .onSubmit { submit() }
                     Button {
                         showPassword.toggle()
                     } label: {
@@ -246,16 +261,36 @@ struct LoginView: View {
             }
         }
         .scrollContentBackground(.hidden)
+        // Drag the form down to put the keyboard away.
+        .scrollDismissesKeyboard(.interactively)
         .screenBackground()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if existing != nil {
                 ToolbarItem(placement: .cancellationAction) { Button(L("cancel")) { dismiss() } }
             }
+            // Bar above the keyboard: previous/next field and Done.
+            ToolbarItemGroup(placement: .keyboard) {
+                Button { moveFocus(-1) } label: { Image(systemName: "chevron.up") }
+                    .disabled(focus == .name)
+                    .accessibilityLabel(L("previous"))
+                Button { moveFocus(1) } label: { Image(systemName: "chevron.down") }
+                    .disabled(focus == .password)
+                    .accessibilityLabel(L("next"))
+                Spacer()
+                Button(L("done")) { focus = nil }.bold()
+            }
         }
     }
 
+    private func moveFocus(_ step: Int) {
+        let order: [Field] = [.name, .server, .username, .password]
+        guard let current = focus, let i = order.firstIndex(of: current) else { return }
+        focus = order[min(max(i + step, 0), order.count - 1)]
+    }
+
     private func submit() {
+        focus = nil
         error = nil
         var user = username.trimmingCharacters(in: .whitespaces)
         var pass = password
