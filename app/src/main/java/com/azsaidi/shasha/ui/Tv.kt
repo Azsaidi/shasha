@@ -17,6 +17,12 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import android.view.KeyEvent
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,6 +61,8 @@ fun Modifier.focusRing(
     val scale by animateFloatAsState(if (focused) focusedScale else 1f, label = "focusScale")
     this
         .onFocusChanged { focused = it.hasFocus }
+        // Draw the focused item above its neighbours so the enlarged card isn't covered.
+        .zIndex(if (focused) 1f else 0f)
         .graphicsLayer {
             scaleX = scale
             scaleY = scale
@@ -112,3 +120,49 @@ fun rememberFocusMemory(screen: String): FocusMemory {
 /** Attach to the item with [key] so [FocusMemory] can focus it again. */
 fun Modifier.remembered(memory: FocusMemory?, key: String): Modifier =
     if (memory != null && memory.key == key) this.focusRequester(memory.requester) else this
+
+private class RemotePressState {
+    var down = false
+    var fired = false
+}
+
+/**
+ * Click and long-press that also work with a TV remote: holding OK (D-pad centre / Enter)
+ * for about half a second triggers [onLongClick]; a short press clicks. Touch works as usual.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+fun Modifier.pressable(onClick: () -> Unit, onLongClick: (() -> Unit)? = null): Modifier = composed {
+    val state = remember { RemotePressState() }
+    val latestClick by rememberUpdatedState(onClick)
+    val latestLongClick by rememberUpdatedState(onLongClick)
+    this
+        .onPreviewKeyEvent { event ->
+            val key = event.nativeKeyEvent
+            val isOk = key.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                key.keyCode == KeyEvent.KEYCODE_ENTER ||
+                key.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+            val longClick = latestLongClick
+            if (!isOk || longClick == null) return@onPreviewKeyEvent false
+            when (key.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    if (key.repeatCount == 0) {
+                        state.down = true
+                        state.fired = false
+                    } else if (state.down && !state.fired) {
+                        // The remote repeats the key while it's held: that's a long press.
+                        state.fired = true
+                        longClick()
+                    }
+                    true
+                }
+                KeyEvent.ACTION_UP -> {
+                    if (state.down && !state.fired) latestClick()
+                    state.down = false
+                    state.fired = false
+                    true
+                }
+                else -> false
+            }
+        }
+        .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+}

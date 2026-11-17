@@ -485,6 +485,6 @@ private fun EpisodeRow(
         modifier = modifier
             .focusRing(RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .pressable(onClick = onClick, onLongClick = onLongClick),
     )
 }

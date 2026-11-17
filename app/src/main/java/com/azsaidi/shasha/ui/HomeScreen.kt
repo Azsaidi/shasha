@@ -556,7 +556,10 @@ private fun Browser(
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(112.dp),
                 state = gridState,
-                contentPadding = PaddingValues(8.dp),
+                contentPadding = PaddingValues(12.dp),
+                // Room around each poster so the focused one can grow without covering others.
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 items(filtered.size) { index ->
@@ -649,7 +652,7 @@ internal fun SearchDialog(initial: String, hint: String, onSearch: (String) -> U
                                     .fillMaxWidth()
                                     .focusRing(RoundedCornerShape(8.dp))
                                     .clip(RoundedCornerShape(8.dp))
-                                    .combinedClickable(
+                                    .pressable(
                                         onClick = { submit(q) },
                                         onLongClick = {
                                             ItemMenu.show(q, listOf(MenuAction(context.getString(R.string.remove_search), Icons.Filled.Delete) { Session.removeSearch(q) }))
@@ -789,7 +792,7 @@ internal fun LiveRow(item: StreamItem, memory: FocusMemory? = null, onClick: () 
             .focusProperties { end = starFocus }
             .focusRing(RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
-            .combinedClickable(
+            .pressable(
                 onClick = {
                     memory?.opened(key)
                     onClick()
@@ -818,9 +821,9 @@ internal fun PosterCard(
     Column(
         modifier
             .remembered(memory, key)
-            .focusRing(RoundedCornerShape(12.dp), focusedScale = 1.06f)
+            .focusRing(RoundedCornerShape(12.dp), focusedScale = 1.05f)
             .clip(RoundedCornerShape(12.dp))
-            .combinedClickable(
+            .pressable(
                 onClick = {
                     memory?.opened(key)
                     onClick()
@@ -869,9 +872,12 @@ internal fun PosterCard(
                 )
             }
         }
+        // Always two lines tall, so every poster in a row is the same height and the grid
+        // doesn't nudge up and down as focus moves sideways.
         Text(
             item.name,
             style = MaterialTheme.typography.labelMedium,
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(start = 2.dp, end = 2.dp, top = 6.dp),

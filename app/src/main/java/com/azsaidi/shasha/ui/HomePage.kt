@@ -300,7 +300,7 @@ internal fun LazyListScope.shelf(@StringRes title: Int, content: LazyListScope.(
             )
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
                 content = content,
             )
         }
@@ -313,9 +313,9 @@ private fun ContinueCard(entry: WatchEntry, modifier: Modifier, onClick: () -> U
     Column(
         modifier
             .width(210.dp)
-            .focusRing(RoundedCornerShape(12.dp), focusedScale = 1.05f)
+            .focusRing(RoundedCornerShape(12.dp), focusedScale = 1.04f)
             .clip(RoundedCornerShape(12.dp))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .pressable(onClick = onClick, onLongClick = onLongClick)
             .padding(4.dp)
     ) {
         Box {
@@ -350,9 +350,10 @@ private fun ContinueCard(entry: WatchEntry, modifier: Modifier, onClick: () -> U
                 )
             }
         }
-        if (!entry.upNext && entry.progress > 0f) {
+        // Same layout for every card (bar and both text lines always present) so rows don't shift.
+        run {
             LinearProgressIndicator(
-                progress = { entry.progress },
+                progress = { if (entry.upNext) 0f else entry.progress },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 6.dp)
@@ -373,15 +374,13 @@ private fun ContinueCard(entry: WatchEntry, modifier: Modifier, onClick: () -> U
             null
         }
         val detail = listOfNotNull(entry.subtitle, remaining).joinToString(" · ")
-        if (detail.isNotEmpty()) {
-            Text(
-                detail,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            detail.ifEmpty { " " },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -391,9 +390,9 @@ private fun ChannelTile(name: String, logo: String?, modifier: Modifier, onClick
     Column(
         modifier
             .width(132.dp)
-            .focusRing(RoundedCornerShape(12.dp), focusedScale = 1.05f)
+            .focusRing(RoundedCornerShape(12.dp), focusedScale = 1.04f)
             .clip(RoundedCornerShape(12.dp))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .pressable(onClick = onClick, onLongClick = onLongClick)
             .padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -408,6 +407,7 @@ private fun ChannelTile(name: String, logo: String?, modifier: Modifier, onClick
         Text(
             name,
             style = MaterialTheme.typography.labelMedium,
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 6.dp),

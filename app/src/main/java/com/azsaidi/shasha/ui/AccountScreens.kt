@@ -376,7 +376,7 @@ fun AccountsScreen(
                         .focusProperties { end = editFocus }
                         .focusRing(RoundedCornerShape(10.dp))
                         .clip(RoundedCornerShape(10.dp))
-                        .combinedClickable(
+                        .pressable(
                             onClick = { onOpen(account) },
                             onLongClick = {
                                 showAccountMenu(
