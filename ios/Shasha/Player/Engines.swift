@@ -430,6 +430,9 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
     private var storedVolume: Float = 1
     private var isMuted = false
     private var lastPollTime: Double = -1
+    /// Where to resume. Applied by seeking once playback starts: VLC's ":start-time" option makes
+    /// it count time from that point, which broke the time bar and saved progress.
+    private var pendingStart: Double = 0
     private var pipController: VLCPictureInPictureWindowControlling?
     private var pipOn = false
     private var resignObserver: Any?
@@ -476,7 +479,7 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         }
         media.addOption(":http-user-agent=\(Http.userAgent)")
         media.addOption(":network-caching=1500")
-        if start > 0 { media.addOption(":start-time=\(Int(start))") }
+        pendingStart = start
         player.media = media
         player.play()
         timer?.invalidate()
@@ -485,6 +488,11 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
 
     private func poll() {
         surface.videoSize = player.videoSize
+        if pendingStart > 0, player.isPlaying, player.isSeekable, (player.media?.length.intValue ?? 0) > 0 {
+            player.time = VLCTime(int: Int32(pendingStart * 1000))
+            pendingStart = 0
+            lastPollTime = -1
+        }
         // VLC can stay in "buffering" while it plays; moving time means it's playing.
         let now = position
         defer { lastPollTime = now }
@@ -515,7 +523,10 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         }
     }
 
-    var position: Double { Double(player.time.intValue) / 1000 }
+    var position: Double {
+        if pendingStart > 0 { return pendingStart }
+        return Double(player.time.intValue) / 1000
+    }
 
     var duration: Double {
         guard let media = player.media else { return 0 }
@@ -560,6 +571,7 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
     func pause() { player.pause() }
 
     func seek(to seconds: Double) {
+        pendingStart = 0
         player.time = VLCTime(int: Int32(max(seconds, 0) * 1000))
     }
 

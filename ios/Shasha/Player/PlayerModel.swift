@@ -48,6 +48,10 @@ final class PlayerModel: ObservableObject, Identifiable {
     private var lastDuration: Double = 0
     private var playingSince: Date?
     private var lastTickPosition: Double = -1
+    /// Resume point not yet reached by the player; progress isn't recorded until it is, so an
+    /// early "0:00" can't overwrite where you were.
+    private var resumeTarget: Double = 0
+    private var resumeSetAt = Date()
     private var noPictureRetried = Set<Int>()
 
     init(items: [PlayItem], index: Int, fromStart: Bool) {
@@ -138,6 +142,8 @@ final class PlayerModel: ObservableObject, Identifiable {
         trackedIndex = i
         lastPosition = startAt
         lastDuration = 0
+        resumeTarget = startAt
+        resumeSetAt = Date()
         e.load(url, start: startAt)
         if item.isLive {
             record(item, position: 0, duration: 0)
@@ -235,6 +241,7 @@ final class PlayerModel: ObservableObject, Identifiable {
 
     func skip(_ seconds: Double) {
         guard let engine, duration > 0 else { return }
+        resumeTarget = 0
         let target = min(max(engine.position + seconds, 0), duration - 1)
         engine.seek(to: target)
         position = target
@@ -242,6 +249,7 @@ final class PlayerModel: ObservableObject, Identifiable {
     }
 
     func seek(to seconds: Double) {
+        resumeTarget = 0
         engine?.seek(to: seconds)
         position = seconds
         showControls()
@@ -396,7 +404,7 @@ final class PlayerModel: ObservableObject, Identifiable {
     private func tick() {
         guard let engine, !closed else { return }
         let p = engine.position
-        if scrubbing == nil, p > 0 || state == .playing { position = p }
+        if scrubbing == nil, resumeTarget == 0 || p >= resumeTarget - 15, p > 0 || state == .playing { position = p }
         // Some streams never say "playing" even though the picture is moving: if time is
         // advancing, it's playing (hides a stuck loading spinner).
         if state == .loading, wantsPlay, lastTickPosition >= 0, p > lastTickPosition + 0.1 {
@@ -428,6 +436,14 @@ final class PlayerModel: ObservableObject, Identifiable {
     private func track() {
         guard let engine, trackedIndex == index else { return }
         let p = engine.position
+        if resumeTarget > 0 {
+            // Wait until the player has actually jumped to the saved spot (or give up after 20 s).
+            if p >= resumeTarget - 15 || Date().timeIntervalSince(resumeSetAt) > 20 {
+                resumeTarget = 0
+            } else {
+                return
+            }
+        }
         if p > 0 { lastPosition = p }
         let d = engine.duration
         if d > 0 { lastDuration = d }
