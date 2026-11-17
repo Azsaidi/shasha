@@ -82,7 +82,9 @@ private struct DownloadsList: View {
     }
 
     private var groups: [DownloadGroup] {
-        let mine = downloads.items.filter { $0.accountId == session.account?.id }
+        // Every download on the device, whichever account saved it: they're files on the phone,
+        // and signing out and back in creates a new account entry.
+        let mine = downloads.items
         var out: [DownloadGroup] = []
         let films = mine.filter { $0.kind == .movie }.sorted { $0.addedAt > $1.addedAt }
         if !films.isEmpty { out.append(DownloadGroup(id: "films", title: L("tab_movies"), items: films)) }
