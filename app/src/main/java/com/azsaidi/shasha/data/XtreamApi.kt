@@ -100,6 +100,7 @@ class XtreamApi(private val account: Account) {
                     extension = null,
                     rating = o.str("rating"),
                     added = o.str("last_modified")?.toLongOrNull(),
+                    year = releaseYear(o, o.str("name")),
                 )
             } else {
                 StreamItem(
@@ -111,6 +112,7 @@ class XtreamApi(private val account: Account) {
                     extension = o.str("container_extension"),
                     rating = o.str("rating"),
                     added = o.str("added")?.toLongOrNull(),
+                    year = if (type == ContentType.MOVIE) releaseYear(o, o.str("name")) else null,
                 )
             }
             out.add(item)
@@ -261,6 +263,17 @@ class XtreamApi(private val account: Account) {
 
     private fun fetchObject(url: HttpUrl): JSONObject =
         try { JSONObject(fetch(url)) } catch (e: JSONException) { throw UnexpectedResponseException() }
+
+    private val yearInText = Regex("(19|20)\\d{2}")
+
+    /** Release year from "year"/"releaseDate" fields, or from a title like "The Prestige (2006)". */
+    private fun releaseYear(o: JSONObject, name: String?): Int? {
+        o.str("year")?.take(4)?.toIntOrNull()?.takeIf { it in 1900..2100 }?.let { return it }
+        (o.str("releaseDate") ?: o.str("release_date") ?: o.str("releasedate"))
+            ?.let { yearInText.find(it)?.value?.toIntOrNull() }
+            ?.let { return it }
+        return yearFromTitle(name)
+    }
 
     companion object {
         /** Turns "example.com:8080/", "http://example.com:8080/get.php?..." etc. into "http://example.com:8080". */

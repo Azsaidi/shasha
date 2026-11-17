@@ -53,16 +53,38 @@ import com.azsaidi.shasha.data.DownloadStatus
 import com.azsaidi.shasha.data.Downloads
 import com.azsaidi.shasha.data.WatchKind
 import com.azsaidi.shasha.data.formatBytes
+import com.azsaidi.shasha.data.Session
+import android.app.DownloadManager
 import com.azsaidi.shasha.player.Playback
 
+/** Why a download failed, in plain words. */
+fun downloadFailureText(context: Context, reason: Int): String = when {
+    reason == 401 || reason == 403 || reason == 429 || reason == 456 || reason == 509 || reason == 503 ->
+        context.getString(R.string.dl_err_refused, reason, Session.auth?.maxConnections ?: "1")
+    reason == 404 -> context.getString(R.string.dl_err_not_found)
+    reason == DownloadManager.ERROR_INSUFFICIENT_SPACE -> context.getString(R.string.dl_err_space)
+    reason == DownloadManager.ERROR_CANNOT_RESUME || reason == DownloadManager.ERROR_HTTP_DATA_ERROR ||
+        reason == DownloadManager.ERROR_FILE_ERROR -> context.getString(R.string.dl_err_dropped)
+    reason > 0 -> context.getString(R.string.dl_err_code, reason)
+    else -> context.getString(R.string.download_failed)
+}
+
 /** Short status text for a download. */
-fun downloadStatusText(context: Context, status: DownloadStatus?): String = when (status?.state) {
-    null, DownloadState.QUEUED -> context.getString(R.string.download_queued)
+fun downloadStatusText(context: Context, status: DownloadStatus?, item: DownloadItem? = null): String = when (status?.state) {
+    null, DownloadState.QUEUED -> when {
+        item == null || item.systemId > 0 -> context.getString(R.string.download_queued)
+        Downloads.streaming -> context.getString(R.string.dl_waiting_stream)
+        else -> context.getString(R.string.dl_waiting_turn)
+    }
     DownloadState.RUNNING -> status.fraction?.let { context.getString(R.string.downloading_pct, (it * 100).toInt()) }
         ?: context.getString(R.string.downloading)
     DownloadState.PAUSED -> context.getString(R.string.download_paused)
     DownloadState.DONE -> context.getString(R.string.downloaded)
-    DownloadState.FAILED -> context.getString(R.string.download_failed)
+    DownloadState.FAILED -> if (item != null && item.url.isNotBlank() && item.retries < 5 && status.reason != DownloadManager.ERROR_INSUFFICIENT_SPACE) {
+        context.getString(R.string.dl_retrying)
+    } else {
+        downloadFailureText(context, status.reason)
+    }
 }
 
 /** Options for something that is downloaded or downloading. */
@@ -73,13 +95,16 @@ fun showDownloadMenu(context: Context, item: DownloadItem, retry: (() -> Unit)? 
         actions.add(MenuAction(context.getString(R.string.play), Icons.Filled.PlayArrow) { Playback.downloads(context, item) })
         actions.add(MenuAction(context.getString(R.string.delete_download), Icons.Filled.Delete) { Downloads.remove(item) })
     } else if (state == DownloadState.FAILED) {
-        if (retry != null) actions.add(MenuAction(context.getString(R.string.retry_download), Icons.Filled.Refresh, retry))
+        val again = retry ?: if (item.url.isNotBlank()) ({ Downloads.retry(item) }) else null
+        if (again != null) actions.add(MenuAction(context.getString(R.string.retry_download), Icons.Filled.Refresh, again))
         actions.add(MenuAction(context.getString(R.string.delete_download), Icons.Filled.Delete) { Downloads.remove(item) })
     } else {
         actions.add(MenuAction(context.getString(R.string.cancel_download), Icons.Filled.Close) { Downloads.remove(item) })
     }
     val title = listOfNotNull(item.title, item.subtitle).joinToString(" · ")
-    ItemMenu.show(title, actions)
+    // Put the reason in the title so it's visible before choosing.
+    val heading = if (state == DownloadState.FAILED) "$title\n${downloadFailureText(context, Downloads.status[item.key]?.reason ?: 0)}" else title
+    ItemMenu.show(heading, actions)
 }
 
 /** Download button for a film page; shows progress and turns into a "Downloaded" button. */
@@ -114,7 +139,7 @@ fun MovieDownloadButton(onDownload: () -> Unit, item: DownloadItem?) {
             else -> {
                 ProgressIcon(status)
                 Spacer(Modifier.width(10.dp))
-                Text(downloadStatusText(context, status))
+                Text(downloadStatusText(context, status, item), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -208,7 +233,11 @@ private fun DownloadRow(context: Context, item: DownloadItem, title: String, sub
         headlineContent = { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium) },
         supportingContent = {
             Column {
-                Text(listOfNotNull(subtitle, downloadStatusText(context, status)).joinToString(" · "), maxLines = 1)
+                Text(
+                    listOfNotNull(subtitle, downloadStatusText(context, status, item)).joinToString(" · "),
+                    maxLines = 2,
+                    color = if (status?.state == DownloadState.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 if (status != null && status.active) {
                     Spacer(Modifier.height(6.dp))
                     val fraction = status.fraction

@@ -54,8 +54,12 @@ object CatalogCache {
                                 val ext = r.nullableString()
                                 val rating = r.nullableString()
                                 val added = r.nextLong()
+                                // Year was added later; older cache files simply don't have it.
+                                val year = if (r.hasNext()) r.nextInt() else 0
+                                while (r.hasNext()) r.skipValue()
                                 r.endArray()
-                                items.add(StreamItem(id, name, icon, category, type, ext, rating, added.takeIf { it > 0 }))
+                                val knownYear = year.takeIf { it > 0 } ?: if (type != ContentType.LIVE) yearFromTitle(name) else null
+                                items.add(StreamItem(id, name, icon, category, type, ext, rating, added.takeIf { it > 0 }, knownYear))
                             }
                             r.endArray()
                         }
@@ -88,6 +92,7 @@ object CatalogCache {
                         .value(i.extension)
                         .value(i.rating)
                         .value(i.added ?: 0L)
+                        .value((i.year ?: 0).toLong())
                         .endArray()
                 }
                 w.endArray()

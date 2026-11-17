@@ -45,6 +45,10 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material3.RadioButton
+import com.azsaidi.shasha.data.Connectivity
+import com.azsaidi.shasha.data.Downloads
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -144,8 +148,12 @@ private enum class HomeTab(@StringRes val label: Int, val icon: ImageVector) {
 enum class SortOrder(@StringRes val label: Int) {
     DEFAULT(R.string.sort_default),
     ADDED(R.string.sort_added),
-    NAME(R.string.sort_name),
+    RELEASE_NEW(R.string.sort_release_new),
+    RELEASE_OLD(R.string.sort_release_old),
     RATING(R.string.sort_rating),
+    NAME(R.string.sort_name),
+    NAME_DESC(R.string.sort_name_desc),
+    FAVOURITES(R.string.sort_favourites),
 }
 
 internal val ButtonShape = RoundedCornerShape(24.dp)
@@ -198,6 +206,7 @@ fun HomeScreen(
 
     val content: @Composable () -> Unit = {
         Column(Modifier.fillMaxSize()) {
+            OfflineBanner(showButton = tab != HomeTab.DOWNLOADS) { tab = HomeTab.DOWNLOADS }
             RefreshBanner()
             SplitScreenBanner()
             Box(
@@ -293,6 +302,32 @@ fun HomeScreen(
 /** Throws away cached lists and downloads them again (progress shows in [RefreshBanner]). */
 internal fun refreshContent() {
     Session.refreshAll()
+}
+
+/** No internet: say so and point to the downloads, which still play. */
+@Composable
+private fun OfflineBanner(showButton: Boolean, onDownloads: () -> Unit) {
+    if (Connectivity.online) return
+    Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.CloudOff, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.offline_title), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                Text(stringResource(R.string.offline_body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+            }
+            if (showButton && Downloads.items.isNotEmpty()) {
+                Button(onClick = onDownloads, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) {
+                    Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.go_downloads))
+                }
+            }
+        }
+    }
 }
 
 /** Shown while streams are picked for split screen: how many, Watch and Clear. */
@@ -411,8 +446,16 @@ private fun ContentTab(type: ContentType, onOpen: (StreamItem, List<StreamItem>)
 internal fun List<StreamItem>.ordered(order: SortOrder): List<StreamItem> = when (order) {
     SortOrder.DEFAULT -> this
     SortOrder.ADDED -> sortedByDescending { it.added ?: 0L }
-    SortOrder.NAME -> sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+    // Titles without a known year go to the end either way.
+    SortOrder.RELEASE_NEW -> sortedWith(compareBy<StreamItem> { it.year == null }.thenByDescending { it.year ?: 0 }.thenByDescending { it.added ?: 0L })
+    SortOrder.RELEASE_OLD -> sortedWith(compareBy<StreamItem> { it.year == null }.thenBy { it.year ?: 0 })
     SortOrder.RATING -> sortedByDescending { it.rating?.toDoubleOrNull() ?: 0.0 }
+    SortOrder.NAME -> sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+    SortOrder.NAME_DESC -> sortedWith(compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.name })
+    SortOrder.FAVOURITES -> {
+        val favourites = Session.favorites.map { "${it.type}:${it.id}" }.toHashSet()
+        sortedBy { if ("${it.type}:${it.id}" in favourites) 0 else 1 }
+    }
 }
 
 /** Search box for phones, with recent searches shown while it is focused and empty. */
@@ -491,10 +534,11 @@ private fun Browser(
     val noun = stringResource(type.nounRes)
 
     val sortOptions = if (type == ContentType.LIVE) {
-        listOf(SortOrder.DEFAULT, SortOrder.NAME)
+        listOf(SortOrder.DEFAULT, SortOrder.NAME, SortOrder.NAME_DESC, SortOrder.FAVOURITES)
     } else {
-        listOf(SortOrder.DEFAULT, SortOrder.ADDED, SortOrder.NAME, SortOrder.RATING)
+        SortOrder.entries.toList()
     }
+    var showSort by remember { mutableStateOf(false) }
 
     val counts = remember(items) { items.groupingBy { it.categoryId ?: "" }.eachCount() }
     val categoryList = remember(categories, counts) {
@@ -569,10 +613,7 @@ private fun Browser(
             item {
                 FilterChip(
                     selected = sort != SortOrder.DEFAULT,
-                    onClick = {
-                        sort = sortOptions[(sortOptions.indexOf(sort) + 1) % sortOptions.size]
-                        scrollTop()
-                    },
+                    onClick = { showSort = true },
                     label = { Text(stringResource(sort.label), maxLines = 1) },
                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier.focusRing(RoundedCornerShape(8.dp)),
@@ -617,6 +658,19 @@ private fun Browser(
                 }
             }
         }
+    }
+
+    if (showSort) {
+        SortDialog(
+            options = sortOptions,
+            selected = sort,
+            onSelect = {
+                sort = it
+                showSort = false
+                scrollTop()
+            },
+            onDismiss = { showSort = false },
+        )
     }
 
     if (showSearch) {
@@ -731,6 +785,46 @@ internal fun SearchDialog(initial: String, hint: String, onSearch: (String) -> U
         },
     )
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+}
+
+@Composable
+private fun SortDialog(options: List<SortOrder>, selected: SortOrder, onSelect: (SortOrder) -> Unit, onDismiss: () -> Unit) {
+    val firstFocus = remember { FocusRequester() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.sort_by)) },
+        text = {
+            Column {
+                options.forEach { option ->
+                    val isSelected = option == selected
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .then(if (isSelected) Modifier.focusRequester(firstFocus) else Modifier)
+                            .focusRing(RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onSelect(option) }
+                            .padding(horizontal = 8.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = isSelected, onClick = null)
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            stringResource(option.label),
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) {
+                Text(stringResource(R.string.close))
+            }
+        },
+    )
+    LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
 }
 
 @Composable

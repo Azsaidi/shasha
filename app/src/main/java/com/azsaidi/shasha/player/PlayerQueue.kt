@@ -64,7 +64,7 @@ object MultiView {
     fun clear() = items.clear()
 
     fun open(context: Context) {
-        if (items.isNotEmpty()) context.startActivity(Intent(context, MultiViewActivity::class.java))
+        if (items.isNotEmpty()) MultiViewActivity.open(context, pick = false)
     }
 }
 

@@ -86,7 +86,7 @@ object ItemMenu {
         val armed = remember(current) { booleanArrayOf(false) }
         AlertDialog(
             onDismissRequest = { request = null },
-            title = { Text(current.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            title = { Text(current.title, maxLines = 4, overflow = TextOverflow.Ellipsis) },
             text = {
                 Column(
                     Modifier.onPreviewKeyEvent { event ->

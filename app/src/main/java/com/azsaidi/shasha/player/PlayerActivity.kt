@@ -58,6 +58,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.azsaidi.shasha.R
+import com.azsaidi.shasha.data.Downloads
 import com.azsaidi.shasha.data.EpgEntry
 import com.azsaidi.shasha.data.Http
 import com.azsaidi.shasha.data.Session
@@ -393,9 +394,12 @@ class PlayerActivity : ComponentActivity() {
         topBar.addView(sleepView, pillParams())
         topBar.addView(resizeView, pillParams())
         // Adds what's playing to split screen, to watch it alongside other streams.
+        // Split: keep this stream and go straight to picking a second one.
         topBar.addView(pill(getString(R.string.split_short)) {
             val current = player?.let { items.getOrNull(it.currentMediaItemIndex) }
-            MultiView.add(this, current)
+            if (current != null && MultiView.items.none { it.key == current.key }) MultiView.add(this, current)
+            MultiViewActivity.open(this, pick = MultiView.items.size < MultiView.MAX)
+            finish()
         }, pillParams())
         if (pipSupported()) topBar.addView(pill(getString(R.string.pip)) { enterPip() }, pillParams())
 
@@ -674,6 +678,8 @@ class PlayerActivity : ComponentActivity() {
 
         playerView.player = exo
         player = exo
+        // Downloads wait while we stream on plans that allow only one connection.
+        Downloads.setStreaming(items.any { it.url.startsWith("http") })
         trackedIndex = startIndex
         lastPosition = 0
         lastDuration = 0
@@ -689,6 +695,7 @@ class PlayerActivity : ComponentActivity() {
         p.removeListener(listener)
         p.release()
         player = null
+        Downloads.setStreaming(false)
         playerView.player = null
         epgJob?.cancel()
     }

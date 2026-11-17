@@ -30,6 +30,8 @@ data class StreamItem(
     val rating: String?,
     /** Unix seconds when the provider added (or last updated) this item. */
     val added: Long? = null,
+    /** Release year, from the provider's data or the title. */
+    val year: Int? = null,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -40,6 +42,7 @@ data class StreamItem(
         .put("extension", extension ?: "")
         .put("rating", rating ?: "")
         .put("added", added ?: 0L)
+        .put("year", year ?: 0)
 
     companion object {
         fun fromJson(o: JSONObject) = StreamItem(
@@ -51,6 +54,7 @@ data class StreamItem(
             extension = o.optString("extension").ifBlank { null },
             rating = o.optString("rating").ifBlank { null },
             added = o.optLong("added", 0L).takeIf { it > 0 },
+            year = o.optInt("year", 0).takeIf { it > 0 },
         )
     }
 }
@@ -161,6 +165,14 @@ data class WatchEntry(
             )
         }
     }
+}
+
+private val yearInName = Regex("\\(\\s*((?:19|20)\\d{2})\\s*\\)|[-–]\\s*((?:19|20)\\d{2})\\s*$")
+
+/** "The Prestige (2006)" or "Film - 2006" → 2006. */
+fun yearFromTitle(name: String?): Int? {
+    val match = name?.let { yearInName.find(it) } ?: return null
+    return match.groupValues[1].ifEmpty { match.groupValues[2] }.toIntOrNull()
 }
 
 /** Reads a string field, treating missing, JSON null, "null" and blank values as null. */
