@@ -26,6 +26,10 @@ workflows:
       cocoapods: default
     triggering:
       events: []
+    # Keep the VLC download between builds so it isn't fetched every time.
+    cache:
+      cache_paths:
+        - $HOME/Library/Caches/CocoaPods
     scripts:
       - name: Generate Xcode project
         script: |
@@ -35,9 +39,24 @@ workflows:
           xcodegen generate
       - name: Install VLC (CocoaPods)
         script: |
-          set -euo pipefail
+          set -uo pipefail
           cd ios
-          pod install --repo-update
+          # Codemagic machines sometimes can't look up host names. Retry, and if lookups are
+          # failing, switch the machine to public DNS before trying again.
+          for attempt in 1 2 3 4; do
+            if pod install --repo-update; then exit 0; fi
+            echo "pod install failed (attempt $attempt)"
+            if ! nslookup download.videolan.org >/dev/null 2>&1; then
+              echo "DNS lookups are failing: switching to public DNS"
+              networksetup -listallnetworkservices | tail -n +2 | while read -r service; do
+                sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8 || true
+              done
+              sudo dscacheutil -flushcache || true
+              sudo killall -HUP mDNSResponder || true
+            fi
+            sleep $((attempt * 10))
+          done
+          exit 1
       - name: Set version and build number
         script: |
           set -euo pipefail
