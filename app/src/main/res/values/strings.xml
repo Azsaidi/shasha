@@ -298,4 +298,17 @@
     <string name="clarity_0">Sound: normal</string>
     <string name="clarity_1">Sound: clearer</string>
     <string name="clarity_2">Sound: much clearer</string>
+    <string name="clarity_custom">Sound: custom</string>
+    <string name="sound_title">Sound</string>
+    <string name="sound_normal">Normal</string>
+    <string name="sound_clearer">Clearer</string>
+    <string name="sound_much">Much clearer</string>
+    <string name="sound_dialogue">Dialogue</string>
+    <string name="sound_air">Air (lost top end)</string>
+    <string name="sound_treble">Treble</string>
+    <string name="sound_mud">Mud cut</string>
+    <string name="sound_focus">Dialogue vs music</string>
+    <string name="sound_tame">Tame high notes</string>
+    <string name="sound_reset">Reset to Clearer</string>
+    <string name="sound_hint">Changes apply as you move them and are saved for this series, film or channel.</string>
 </resources>

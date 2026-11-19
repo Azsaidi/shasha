@@ -23,16 +23,18 @@ import kotlin.math.sqrt
  * then turned up against the rest; music on the sides is left alone, so it isn't made harsh.
  * A smooth limiter (gain riding, not clipping) keeps peaks in check without buzzing.
  *
- * Works on 16-bit PCM, any sample rate and channel count. Level 0 passes sound through untouched.
+ * Works on 16-bit PCM, any sample rate and channel count. No settings: sound passes through untouched.
  */
 @UnstableApi
 class ClarityProcessor : BaseAudioProcessor() {
 
-    @Volatile var level: Int = 0
+    /** null = sound passes through untouched. Can change at any time (the Sound sliders). */
+    @Volatile var settings: ClaritySettings? = null
 
     private var channels = 0
     private var rate = 0
-    private var builtFor = -1
+    private var built = false
+    private var tuned: ClaritySettings? = null
 
     private lateinit var lowCut: Array<Biquad>
     private lateinit var topCut: Array<Biquad>
@@ -42,17 +44,17 @@ class ClarityProcessor : BaseAudioProcessor() {
     private lateinit var exciteIn: Biquad
     private lateinit var exciteOut: Biquad
     private lateinit var exciteOut2: Biquad
+    private lateinit var hiDetect: Biquad
     private var envelope = 0f
     private var noiseFloor = 1f
     private var attack = 0f
     private var release = 0f
     private var floorRise = 0f
     private var limiterRelease = 0f
-    private var exciteMix = 0f
-    private var midGain = 1f
-    private var sideGain = 1f
-    private var subGain = 1f
-    private var outGain = 1f
+    private var hiEnv = 0f
+    private var fullEnv = 0f
+    private var tameAttack = 0f
+    private var tameRelease = 0f
     private var gain = 1f
     private var frame = FloatArray(0)
 
@@ -60,43 +62,53 @@ class ClarityProcessor : BaseAudioProcessor() {
         if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) return AudioFormat.NOT_SET
         channels = inputAudioFormat.channelCount
         rate = inputAudioFormat.sampleRate
-        builtFor = -1
+        built = false
         return inputAudioFormat
     }
 
-    private fun build(level: Int) {
-        builtFor = level
-        val strong = level >= 2
+    /** New format: every filter from scratch. */
+    private fun build() {
+        built = true
+        tuned = null
         val sr = rate.toDouble()
         lowCut = Array(channels) { Biquad.highPass(sr, 80.0, 0.707) }
         topCut = Array(channels) { Biquad.lowPass(sr, 16000.0, 0.707) }
-        mud = Biquad.peak(sr, 300.0, 1.0, if (strong) -3.0 else -2.0)
-        presence = Biquad.peak(sr, 2500.0, 0.9, if (strong) 6.0 else 4.0)
-        treble = Biquad.highShelf(sr, 6000.0, if (strong) 4.5 else 3.0)
+        mud = Biquad.peak(sr, 300.0, 1.0, 0.0)
+        presence = Biquad.peak(sr, 2500.0, 0.9, 0.0)
+        treble = Biquad.highShelf(sr, 6000.0, 0.0)
         exciteIn = Biquad.highPass(sr, 2500.0, 0.707)
         exciteOut = Biquad.highPass(sr, 5000.0, 0.707)
         exciteOut2 = Biquad.highPass(sr, 5000.0, 0.707)
+        hiDetect = Biquad.highPass(sr, 3000.0, 0.707)
         envelope = 0f
         noiseFloor = 1f
+        hiEnv = 0f
+        fullEnv = 0f
         gain = 1f
         attack = exp(-1.0 / (0.002 * sr)).toFloat()
         release = exp(-1.0 / (0.06 * sr)).toFloat()
         floorRise = (1.0 / (4 * sr)).toFloat()
         limiterRelease = (1 - exp(-1.0 / (0.15 * sr))).toFloat()
-        exciteMix = if (strong) 0.9f else 0.5f
-        midGain = if (strong) 1.25f else 1.12f
-        sideGain = if (strong) 0.85f else 1f
-        subGain = if (strong) 0.6f else 0.8f
-        outGain = if (strong) 0.8f else 0.85f
+        tameAttack = exp(-1.0 / (0.005 * sr)).toFloat()
+        tameRelease = exp(-1.0 / (0.08 * sr)).toFloat()
         frame = FloatArray(channels)
     }
 
+    /** New slider values: retune the filters but keep their memory, so moving a slider doesn't click. */
+    private fun tune(s: ClaritySettings) {
+        tuned = s
+        val sr = rate.toDouble()
+        mud.retune(Biquad.peak(sr, 300.0, 1.0, -s.mud.toDouble()))
+        presence.retune(Biquad.peak(sr, 2500.0, 0.9, s.dialogue.toDouble()))
+        treble.retune(Biquad.highShelf(sr, 6000.0, s.treble.toDouble()))
+    }
+
     /** The dialogue part: mud cut, speech lift, exciter, treble, then turned up. */
-    private fun dialogue(input: Float): Float {
-        var m = mud.run(input)
-        m = presence.run(m)
+    private fun dialogue(input: Float, s: ClaritySettings): Float {
+        val base = mud.run(input)
+        val lifted = presence.run(base)
         // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
-        val upper = exciteIn.run(m)
+        val upper = exciteIn.run(lifted)
         val a = abs(upper)
         val k = if (a > envelope) attack else release
         val env = maxOf(k * envelope + (1 - k) * a, 1e-6f)
@@ -105,37 +117,52 @@ class ClarityProcessor : BaseAudioProcessor() {
         val harmonics = exciteOut2.run(exciteOut.run(upper * upper / env))
         // Only while the sound stands clearly above the background noise (about 10 dB).
         val threshold = maxOf(3 * noiseFloor, 3e-4f)
-        m += harmonics * exciteMix * (env * env / (env * env + threshold * threshold))
-        return treble.run(m) * midGain
+        val bright = treble.run(lifted + harmonics * s.air * (env * env / (env * env + threshold * threshold)))
+        var amount = 1f
+        if (s.tame > 0f) {
+            // Already high-pitched sound (whistles, "s" sounds, strings) gets less of the lift.
+            val hi = abs(hiDetect.run(base))
+            hiEnv = (if (hi > hiEnv) tameAttack else tameRelease) * (hiEnv - hi) + hi
+            val full = abs(base)
+            fullEnv = (if (full > fullEnv) tameAttack else tameRelease) * (fullEnv - full) + full
+            val ratio = hiEnv / maxOf(fullEnv, 1e-6f)
+            val tamed = (1.25f / (1 + (ratio / 0.4f) * (ratio / 0.4f))).coerceIn(0.15f, 1f)
+            amount = 1 - s.tame * (1 - tamed)
+        }
+        return (base + (bright - base) * amount) * s.midGain
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         val size = inputBuffer.remaining()
         if (size == 0) return
         val out = replaceOutputBuffer(size)
-        val lvl = level
-        if (lvl <= 0) {
+        val s = settings
+        if (s == null) {
             out.put(inputBuffer)
             out.flip()
             return
         }
-        if (builtFor != lvl) build(lvl)
+        if (!built) build()
+        if (s != tuned) tune(s)
         val ch = channels
         val f = frame
+        val sideGain = s.sideGain
+        val subGain = s.subGain
+        val outGain = s.outGain
         while (inputBuffer.remaining() >= 2 * ch) {
             for (c in 0 until ch) f[c] = lowCut[c].run(inputBuffer.short / 32768f)
             when {
-                ch == 1 -> f[0] = dialogue(f[0])
+                ch == 1 -> f[0] = dialogue(f[0], s)
                 ch == 2 -> {
                     // Middle (dialogue) and sides (music, effects).
-                    val mid = dialogue((f[0] + f[1]) * 0.5f)
+                    val mid = dialogue((f[0] + f[1]) * 0.5f, s)
                     val side = (f[0] - f[1]) * 0.5f * sideGain
                     f[0] = mid + side
                     f[1] = mid - side
                 }
                 else -> {
                     // 5.1 / 7.1 order: FL FR FC LFE ...: dialogue is the centre channel.
-                    f[2] = dialogue(f[2])
+                    f[2] = dialogue(f[2], s)
                     if (ch >= 4) f[3] *= subGain
                     for (c in 0 until ch) if (c != 2 && c != 3) f[c] *= sideGain
                 }
@@ -159,22 +186,27 @@ class ClarityProcessor : BaseAudioProcessor() {
     }
 
     override fun onFlush() {
-        builtFor = -1
+        built = false
     }
 
     override fun onReset() {
-        builtFor = -1
+        built = false
         channels = 0
         rate = 0
     }
 
     /** One second-order filter (RBJ audio cookbook), with its own memory. */
     private class Biquad(
-        private val b0: Float, private val b1: Float, private val b2: Float,
-        private val a1: Float, private val a2: Float,
+        private var b0: Float, private var b1: Float, private var b2: Float,
+        private var a1: Float, private var a2: Float,
     ) {
         private var z1 = 0f
         private var z2 = 0f
+
+        /** Takes another filter's settings, keeping this one's memory. */
+        fun retune(o: Biquad) {
+            b0 = o.b0; b1 = o.b1; b2 = o.b2; a1 = o.a1; a2 = o.a2
+        }
 
         fun run(x: Float): Float {
             val y = b0 * x + z1
@@ -223,6 +255,59 @@ class ClarityProcessor : BaseAudioProcessor() {
                     2 * ((a - 1) - (a + 1) * c),
                     (a + 1) - (a - 1) * c - s,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The "Clearer sound" sliders. Clearer and Much clearer are the tuned presets; any change makes a
+ * custom setting, saved per series, film or channel.
+ */
+data class ClaritySettings(
+    /** Lift where speech is understood (2.5 kHz), dB 0..10. */
+    val dialogue: Float,
+    /** Exciter: rebuilds the top end a bad encode cut off, 0..1.5. */
+    val air: Float,
+    /** Treble shelf above 6 kHz, dB 0..8. */
+    val treble: Float,
+    /** Cut of boxy low-mid "mud" at 300 Hz, dB 0..6. */
+    val mud: Float,
+    /** Dialogue (middle of the mix) against music and effects (sides), 0..1. */
+    val focus: Float,
+    /** How much already high-pitched sound is held back from the lift, 0..1 (0 = off). */
+    val tame: Float,
+) {
+    // Gains along the "Dialogue vs music" slider; 0.25 and 0.5 are exactly the presets' values.
+    val midGain: Float get() = along(focus, 1f, 1.12f, 1.25f, 1.5f)
+    val sideGain: Float get() = along(focus, 1f, 1f, 0.85f, 0.6f)
+    val subGain: Float get() = along(focus, 1f, 0.8f, 0.6f, 0.5f)
+    val outGain: Float get() = along(focus, 0.9f, 0.85f, 0.8f, 0.7f)
+
+    fun toJson(): String = org.json.JSONObject()
+        .put("dialogue", dialogue.toDouble()).put("air", air.toDouble()).put("treble", treble.toDouble())
+        .put("mud", mud.toDouble()).put("focus", focus.toDouble()).put("tame", tame.toDouble())
+        .toString()
+
+    companion object {
+        val CLEARER = ClaritySettings(dialogue = 4f, air = 0.5f, treble = 3f, mud = 2f, focus = 0.25f, tame = 0f)
+        val MUCH_CLEARER = ClaritySettings(dialogue = 6f, air = 0.9f, treble = 4.5f, mud = 3f, focus = 0.5f, tame = 0f)
+
+        fun fromJson(text: String): ClaritySettings? = runCatching {
+            val o = org.json.JSONObject(text)
+            ClaritySettings(
+                o.getDouble("dialogue").toFloat(), o.getDouble("air").toFloat(), o.getDouble("treble").toFloat(),
+                o.getDouble("mud").toFloat(), o.getDouble("focus").toFloat(), o.optDouble("tame", 0.0).toFloat(),
+            )
+        }.getOrNull()
+
+        /** Straight lines between values at focus 0, 0.25, 0.5 and 1. */
+        private fun along(f: Float, v0: Float, v1: Float, v2: Float, v3: Float): Float {
+            val x = f.coerceIn(0f, 1f)
+            return when {
+                x <= 0.25f -> v0 + (v1 - v0) * x / 0.25f
+                x <= 0.5f -> v1 + (v2 - v1) * (x - 0.25f) / 0.25f
+                else -> v2 + (v3 - v2) * (x - 0.5f) / 0.5f
             }
         }
     }

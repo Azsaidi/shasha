@@ -299,4 +299,17 @@
     <string name="clarity_0">الصوت: عادي</string>
     <string name="clarity_1">الصوت: أوضح</string>
     <string name="clarity_2">الصوت: أوضح بكثير</string>
+    <string name="clarity_custom">الصوت: مخصص</string>
+    <string name="sound_title">الصوت</string>
+    <string name="sound_normal">عادي</string>
+    <string name="sound_clearer">أوضح</string>
+    <string name="sound_much">أوضح بكثير</string>
+    <string name="sound_dialogue">الحوار</string>
+    <string name="sound_air">الصفاء (الترددات المفقودة)</string>
+    <string name="sound_treble">الترددات العالية</string>
+    <string name="sound_mud">تخفيف الثقل</string>
+    <string name="sound_focus">الحوار مقابل الموسيقى</string>
+    <string name="sound_tame">تهدئة النغمات الحادة</string>
+    <string name="sound_reset">العودة إلى «أوضح»</string>
+    <string name="sound_hint">تُطبَّق التغييرات فور تحريكها وتُحفظ لهذا المسلسل أو الفيلم أو القناة.</string>
 </resources>

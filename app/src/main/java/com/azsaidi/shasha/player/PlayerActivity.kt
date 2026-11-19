@@ -407,7 +407,7 @@ class PlayerActivity : ComponentActivity() {
             resizeView.text = resizeModes[resizeIndex].second
         }
         sleepView = pill(getString(R.string.sleep)) { cycleSleepTimer() }
-        clarityView = pill(getString(R.string.clarity_0)) { cycleClarity() }
+        clarityView = pill(getString(R.string.clarity_0)) { showSoundPanel() }
 
         topBar.addView(back, LinearLayout.LayoutParams(dp(44), dp(44)))
         topBar.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -640,31 +640,125 @@ class PlayerActivity : ComponentActivity() {
         WatchKind.LIVE -> "live:${item.streamId}"
     }
 
-    private fun clarityLabel(level: Int) = getString(
-        when (level) {
-            1 -> R.string.clarity_1
-            2 -> R.string.clarity_2
-            else -> R.string.clarity_0
+    private fun clarityLabel(s: ClaritySettings?) = getString(
+        when (s) {
+            null -> R.string.clarity_0
+            ClaritySettings.CLEARER -> R.string.clarity_1
+            ClaritySettings.MUCH_CLEARER -> R.string.clarity_2
+            else -> R.string.clarity_custom
         },
     )
 
-    private fun cycleClarity() {
-        val item = player?.let { items.getOrNull(it.currentMediaItemIndex) } ?: return
-        val level = (Store.clarity(clarityKey(item)) + 1) % 3
-        Store.setClarity(clarityKey(item), level)
-        applyClarity(level)
-        Toast.makeText(this, clarityLabel(level), Toast.LENGTH_SHORT).show()
+    private fun currentItem(): PlayItem? = player?.let { items.getOrNull(it.currentMediaItemIndex) }
+
+    private fun setClarity(s: ClaritySettings?) {
+        val item = currentItem() ?: return
+        Store.setClarity(clarityKey(item), s)
+        applyClarity(s)
     }
 
     private fun applyCurrentClarity() {
-        val item = player?.let { items.getOrNull(it.currentMediaItemIndex) } ?: return
+        val item = currentItem() ?: return
         applyClarity(Store.clarity(clarityKey(item)))
     }
 
-    /** Turns "Clearer sound" up or down; it takes effect straight away. */
-    private fun applyClarity(level: Int) {
-        if (::clarityView.isInitialized) clarityView.text = clarityLabel(level)
-        clarity?.level = level
+    /** Changes the sound straight away (the processor retunes without a click). */
+    private fun applyClarity(s: ClaritySettings?) {
+        if (::clarityView.isInitialized) clarityView.text = clarityLabel(s)
+        clarity?.settings = s
+    }
+
+    /** The Sound panel: presets and sliders, applied as they move, saved for this title. */
+    private fun showSoundPanel() {
+        val item = currentItem() ?: return
+        var current = Store.clarity(clarityKey(item))
+        val pad = dp(20)
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, dp(12), pad, dp(8))
+        }
+        val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val presetViews = mutableListOf<Pair<TextView, ClaritySettings?>>()
+        val sliders = mutableListOf<() -> Unit>()
+
+        fun refresh() {
+            for ((view, preset) in presetViews) {
+                val on = preset == current
+                view.background = buttonBackground(if (on) 0xFF38BDF8.toInt() else 0x33FFFFFF, dp(18).toFloat())
+                view.setTextColor(if (on) 0xFF0B1320.toInt() else Color.WHITE)
+            }
+            sliders.forEach { it() }
+        }
+
+        for ((label, preset) in listOf(
+            getString(R.string.sound_normal) to null,
+            getString(R.string.sound_clearer) to ClaritySettings.CLEARER,
+            getString(R.string.sound_much) to ClaritySettings.MUCH_CLEARER,
+        )) {
+            val v = pill(label) {
+                current = preset
+                setClarity(preset)
+                refresh()
+            }
+            presetViews += v to preset
+            presets.addView(v, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8) })
+        }
+        column.addView(presets)
+        column.addView(TextView(this).apply {
+            text = getString(R.string.sound_hint)
+            setTextColor(0xFF94A3B8.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, dp(8), 0, dp(4))
+        })
+
+        fun slider(title: Int, max: Float, unit: String?, get: (ClaritySettings) -> Float, set: (ClaritySettings, Float) -> ClaritySettings) {
+            val label = TextView(this).apply {
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setPadding(0, dp(14), 0, 0)
+            }
+            val bar = android.widget.SeekBar(this).apply {
+                this.max = (max * 10).toInt()
+                isFocusable = true
+            }
+            fun show() {
+                val s = current
+                val value = get(s ?: ClaritySettings.CLEARER)
+                val text = if (unit != null) String.format(java.util.Locale.US, "%.1f %s", value, unit) else "${(value / max * 100).toInt()}%"
+                label.text = "${getString(title)}   $text"
+                if (bar.progress != (value * 10).toInt()) bar.progress = (value * 10).toInt()
+                bar.isEnabled = s != null
+                label.alpha = if (s != null) 1f else 0.45f
+            }
+            bar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: android.widget.SeekBar, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    val s = current ?: return
+                    current = set(s, progress / 10f)
+                    setClarity(current)
+                    refresh()
+                }
+                override fun onStartTrackingTouch(seekBar: android.widget.SeekBar) {}
+                override fun onStopTrackingTouch(seekBar: android.widget.SeekBar) {}
+            })
+            sliders += { show() }
+            column.addView(label)
+            column.addView(bar)
+        }
+        slider(R.string.sound_dialogue, 10f, "dB", { it.dialogue }) { s, v -> s.copy(dialogue = v) }
+        slider(R.string.sound_air, 1.5f, null, { it.air }) { s, v -> s.copy(air = v) }
+        slider(R.string.sound_treble, 8f, "dB", { it.treble }) { s, v -> s.copy(treble = v) }
+        slider(R.string.sound_mud, 6f, "dB", { it.mud }) { s, v -> s.copy(mud = v) }
+        slider(R.string.sound_focus, 1f, null, { it.focus }) { s, v -> s.copy(focus = v) }
+        slider(R.string.sound_tame, 1f, null, { it.tame }) { s, v -> s.copy(tame = v) }
+        refresh()
+
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(R.string.sound_title)
+            .setView(android.widget.ScrollView(this).apply { addView(column) })
+            .setNeutralButton(R.string.sound_reset) { _, _ -> setClarity(ClaritySettings.CLEARER) }
+            .setPositiveButton(R.string.close, null)
+            .show()
     }
 
     private fun cycleSleepTimer() {

@@ -78,9 +78,20 @@ object Store {
      * "Clearer sound" level for a series, film or channel: 0 normal, 1 clearer, 2 much clearer.
      * Kept per title because only some (badly mastered) ones need it.
      */
-    fun clarity(key: String): Int = prefs.getInt("clarity:$key", 0)
+    /** Clearer sound for a series / film / channel (null = off). Older 1/2 levels become the presets. */
+    fun clarity(key: String): com.azsaidi.shasha.player.ClaritySettings? {
+        val saved = prefs.getString("claritySettings:$key", null)
+        if (saved == "off") return null
+        if (saved != null) return com.azsaidi.shasha.player.ClaritySettings.fromJson(saved)
+        return when (prefs.getInt("clarity:$key", 0)) {
+            1 -> com.azsaidi.shasha.player.ClaritySettings.CLEARER
+            2 -> com.azsaidi.shasha.player.ClaritySettings.MUCH_CLEARER
+            else -> null
+        }
+    }
 
-    fun setClarity(key: String, level: Int) = prefs.edit().putInt("clarity:$key", level).apply()
+    fun setClarity(key: String, settings: com.azsaidi.shasha.player.ClaritySettings?) =
+        prefs.edit().putString("claritySettings:$key", settings?.toJson() ?: "off").apply()
 
     fun favorites(accountId: String): List<StreamItem> = runCatching {
         val arr = JSONArray(prefs.getString("fav:$accountId", null) ?: "[]")
