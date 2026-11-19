@@ -127,6 +127,9 @@ struct PlayerScreen: View {
         .sheet(isPresented: $showList) {
             QueueSheet(model: model)
         }
+        .sheet(isPresented: $model.showSound) {
+            SoundSheet(model: model)
+        }
     }
 
     // MARK: Gestures
@@ -250,7 +253,7 @@ struct PlayerScreen: View {
                 Label("\(L("aspect")): \(L(model.gravity.labelKey))", systemImage: "aspectratio")
             }
             Button {
-                model.cycleClarity()
+                model.showSound = true
             } label: {
                 Label(PlayerModel.clarityLabel(model.clarity), systemImage: "waveform")
             }
@@ -500,6 +503,88 @@ struct TracksSheet: View {
     private func reload() {
         audio = engine?.audioTracks ?? []
         subs = engine?.subtitleTracks ?? []
+    }
+}
+
+/// Clearer sound: presets and sliders, applied as you move them, saved for this title.
+struct SoundSheet: View {
+    @ObservedObject var model: PlayerModel
+    @Environment(\.dismiss) private var dismiss
+
+    private enum Choice: Hashable { case off, clearer, much, custom }
+
+    private var choice: Choice {
+        guard let s = model.clarity else { return .off }
+        if s == .clearer { return .clearer }
+        if s == .muchClearer { return .much }
+        return .custom
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker(L("sound_title"), selection: Binding(get: { choice }, set: { pick($0) })) {
+                        Text(L("sound_normal")).tag(Choice.off)
+                        Text(L("sound_clearer")).tag(Choice.clearer)
+                        Text(L("sound_much")).tag(Choice.much)
+                        if choice == .custom { Text(L("sound_custom")).tag(Choice.custom) }
+                    }
+                    .pickerStyle(.segmented)
+                } footer: {
+                    Text(L("sound_hint"))
+                }
+                Section {
+                    slider(L("sound_dialogue"), \.dialogue, 0...10, unit: "dB")
+                    slider(L("sound_air"), \.air, 0...1.5)
+                    slider(L("sound_treble"), \.treble, 0...8, unit: "dB")
+                    slider(L("sound_mud"), \.mud, 0...6, unit: "dB")
+                    slider(L("sound_focus"), \.focus, 0...1)
+                    slider(L("sound_tame"), \.tame, 0...1)
+                }
+                .disabled(model.clarity == nil)
+                Section {
+                    Button(L("sound_reset")) { model.setClarity(.clearer) }
+                        .disabled(model.clarity == nil || model.clarity == .clearer)
+                }
+            }
+            .navigationTitle(L("sound_title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button(L("done")) { dismiss() } }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func pick(_ c: Choice) {
+        switch c {
+        case .off: model.setClarity(nil)
+        case .clearer: model.setClarity(.clearer)
+        case .much: model.setClarity(.muchClearer)
+        case .custom: break
+        }
+    }
+
+    private func slider(_ title: String, _ key: WritableKeyPath<ClaritySettings, Float>, _ range: ClosedRange<Float>, unit: String? = nil) -> some View {
+        let current = model.clarity ?? .clearer
+        let value = current[keyPath: key]
+        let text = unit == nil ? String(format: "%.0f%%", value / range.upperBound * 100) : String(format: "%.1f \(unit!)", value)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(text).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Slider(value: Binding(
+                get: { (model.clarity ?? .clearer)[keyPath: key] },
+                set: { v in
+                    var s = model.clarity ?? .clearer
+                    s[keyPath: key] = (v * 10).rounded() / 10
+                    model.setClarity(s)
+                }
+            ), in: range)
+        }
     }
 }
 

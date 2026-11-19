@@ -25,7 +25,8 @@ final class PlayerModel: ObservableObject, Identifiable {
     @Published var gravity: VideoGravity = .fit { didSet { engine?.gravity = gravity } }
     @Published private(set) var pipActive = false
     /// "Clearer sound" level for what's playing (0 normal, 1 clearer, 2 much clearer).
-    @Published private(set) var clarity = 0
+    @Published private(set) var clarity: ClaritySettings?
+    @Published var showSound = false
     @Published var scrubbing: Double?
     /// Bumped when the engine changes so the video view is replaced.
     @Published private(set) var engineVersion = 0
@@ -132,7 +133,7 @@ final class PlayerModel: ObservableObject, Identifiable {
         playingSince = nil
         wantsPlay = true
         lastTickPosition = -1
-        let e = Engines.make(for: url, preferVLC: preferVLC || (level > 0 && Engines.vlcAvailable))
+        let e = Engines.make(for: url, preferVLC: preferVLC || (level != nil && Engines.vlcAvailable))
         e.setClarity(level)
         e.gravity = gravity
         e.onState = { [weak self] s in self?.stateChanged(s) }
@@ -286,25 +287,24 @@ final class PlayerModel: ObservableObject, Identifiable {
         }
     }
 
-    static func clarityLabel(_ level: Int) -> String {
-        L(level == 2 ? "clarity_2" : (level == 1 ? "clarity_1" : "clarity_0"))
+    static func clarityLabel(_ settings: ClaritySettings?) -> String {
+        L(settings?.labelKey ?? "clarity_0")
     }
 
-    func cycleClarity() {
+    /// From the Sound panel: applies straight away and is saved for this series / film / channel.
+    func setClarity(_ settings: ClaritySettings?) {
         guard let item = current, let engine else { return }
-        let level = (clarity + 1) % 3
-        Store.shared.setClarity(level, for: clarityKey(item))
-        clarity = level
-        Toast.shared.show(PlayerModel.clarityLabel(level))
-        if level > 0 && !engine.supportsClarity && Engines.vlcAvailable {
+        let wasOn = clarity != nil
+        Store.shared.setClarity(settings, for: clarityKey(item))
+        clarity = settings
+        if settings != nil && !wasOn && !engine.supportsClarity && Engines.vlcAvailable {
             // Apple's player can't change the sound: continue in VLC from the same spot.
             let at = item.isLive ? 0 : engine.position
             track()
             load(index, start: at, preferVLC: true)
         } else {
-            engine.setClarity(level)
+            engine.setClarity(settings)
         }
-        showControls()
     }
 
     func cycleSleep() {

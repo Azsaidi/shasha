@@ -81,8 +81,26 @@ final class Store {
     }
 
     /// "Clearer sound" for a series, film or channel: 0 normal, 1 clearer, 2 much clearer.
-    func clarity(_ key: String) -> Int { defaults.integer(forKey: "clarity:\(key)") }
-    func setClarity(_ level: Int, for key: String) { defaults.set(level, forKey: "clarity:\(key)") }
+    /// Clearer sound for a series / film / channel (nil = off). Older 1/2 levels become the presets.
+    func clarity(_ key: String) -> ClaritySettings? {
+        let k = "claritySettings:\(key)"
+        if let data = defaults.data(forKey: k) { return try? JSONDecoder().decode(ClaritySettings.self, from: data) }
+        if defaults.string(forKey: k) == "off" { return nil }
+        switch defaults.integer(forKey: "clarity:\(key)") {
+        case 1: return .clearer
+        case 2: return .muchClearer
+        default: return nil
+        }
+    }
+
+    func setClarity(_ settings: ClaritySettings?, for key: String) {
+        let k = "claritySettings:\(key)"
+        if let settings, let data = try? JSONEncoder().encode(settings) {
+            defaults.set(data, forKey: k)
+        } else {
+            defaults.set("off", forKey: k)
+        }
+    }
 
     var hideAdult: Bool {
         get { defaults.object(forKey: "hideAdult") as? Bool ?? true }

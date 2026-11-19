@@ -266,3 +266,18 @@
 "clarity_0" = "Sound: normal";
 "clarity_1" = "Sound: clearer";
 "clarity_2" = "Sound: much clearer";
+
+"clarity_custom" = "Sound: custom";
+"sound_title" = "Sound";
+"sound_normal" = "Normal";
+"sound_clearer" = "Clearer";
+"sound_much" = "Much clearer";
+"sound_custom" = "Custom";
+"sound_dialogue" = "Dialogue";
+"sound_air" = "Air (lost top end)";
+"sound_treble" = "Treble";
+"sound_mud" = "Mud cut";
+"sound_focus" = "Dialogue vs music";
+"sound_tame" = "Tame high notes";
+"sound_reset" = "Reset to Clearer";
+"sound_hint" = "Changes apply as you move them and are saved for this series, film or channel.";

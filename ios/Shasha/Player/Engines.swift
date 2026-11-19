@@ -58,7 +58,7 @@ protocol PlaybackEngine: AnyObject {
 
     /// Only VLC can change the sound (equalizer); Apple's player can't.
     var supportsClarity: Bool { get }
-    func setClarity(_ level: Int)
+    func setClarity(_ settings: ClaritySettings?)
 
     var audioTracks: [MediaTrack] { get }
     var subtitleTracks: [MediaTrack] { get }
@@ -323,7 +323,7 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
     func setAutoPip(_ on: Bool) { pip?.canStartPictureInPictureAutomaticallyFromInline = on }
 
     var supportsClarity: Bool { false }
-    func setClarity(_ level: Int) {}
+    func setClarity(_ settings: ClaritySettings?) {}
 
     /// Why picture-in-picture can't start, for the message shown instead.
     var pipProblem: String? {
@@ -628,28 +628,29 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
 
     var supportsClarity: Bool { true }
 
-    func setClarity(_ level: Int) {
-        if level > 0, clarityOutput == nil {
+    func setClarity(_ settings: ClaritySettings?) {
+        if settings != nil, clarityOutput == nil {
             let output = ClarityOutput()
             if output.attach(to: player) {
                 clarityOutput = output
                 // VLC picks up the new sound path when it next opens: reopen at the same spot.
                 if let url = currentURL, player.media != nil {
                     let at = duration > 0 ? position : 0
-                    output.level = level
+                    output.settings = settings
                     load(url, start: at)
                 }
             }
         }
         if let clarityOutput {
-            clarityOutput.level = level
+            clarityOutput.settings = settings
             player.equalizer = nil
             return
         }
-        guard level > 0 else {
+        guard let settings else {
             player.equalizer = nil
             return
         }
+        let level = settings.dialogue >= 5 ? 2 : 1
         // Fallback when our own sound path isn't available: VLC's equalizer.
         let eq = VLCAudioEqualizer()
         for band in eq.bands {

@@ -1,6 +1,46 @@
 import AVFoundation
 import os
 
+/// The "Clearer sound" sliders. Clearer and Much clearer are the tuned presets; any change
+/// makes a custom setting, saved per series, film or channel.
+struct ClaritySettings: Codable, Equatable {
+    /// Lift where speech is understood (2.5 kHz), dB.
+    var dialogue: Float
+    /// Exciter: rebuilds the top end a bad encode cut off. 0...1.5.
+    var air: Float
+    /// Treble shelf above 6 kHz, dB.
+    var treble: Float
+    /// Cut of boxy low-mid "mud" at 300 Hz, dB.
+    var mud: Float
+    /// Dialogue (middle of the mix) against music and effects (sides). 0...1.
+    var focus: Float
+    /// How much already high-pitched sound is held back from the lift. 0...1 (0 = off).
+    var tame: Float
+
+    static let clearer = ClaritySettings(dialogue: 4, air: 0.5, treble: 3, mud: 2, focus: 0.25, tame: 0)
+    static let muchClearer = ClaritySettings(dialogue: 6, air: 0.9, treble: 4.5, mud: 3, focus: 0.5, tame: 0)
+
+    // Gains along the "Dialogue vs music" slider; 0.25 and 0.5 are exactly the presets' values.
+    var midGain: Float { Self.along(focus, [1, 1.12, 1.25, 1.5]) }
+    var sideGain: Float { Self.along(focus, [1, 1, 0.85, 0.6]) }
+    var outGain: Float { Self.along(focus, [0.9, 0.85, 0.8, 0.7]) }
+
+    /// Straight lines between values at focus 0, 0.25, 0.5 and 1.
+    private static func along(_ f: Float, _ v: [Float]) -> Float {
+        let x = min(max(f, 0), 1)
+        if x <= 0.25 { return v[0] + (v[1] - v[0]) * x / 0.25 }
+        if x <= 0.5 { return v[1] + (v[2] - v[1]) * (x - 0.25) / 0.25 }
+        return v[2] + (v[3] - v[2]) * (x - 0.5) / 0.5
+    }
+
+    /// "clarity_1" / "clarity_2" for the presets, "clarity_custom" otherwise.
+    var labelKey: String {
+        if self == .clearer { return "clarity_1" }
+        if self == .muchClearer { return "clarity_2" }
+        return "clarity_custom"
+    }
+}
+
 /// "Clearer sound" for dull, muffled soundtracks.
 ///
 /// Dialogue sits in the middle of a stereo mix; music and effects are spread to the sides. So the
@@ -9,34 +49,36 @@ import os
 /// "air" a bad encode cut off (only above the background noise, so hiss isn't turned into "rain"),
 /// and a little treble. The middle is then turned up against the sides. Music on the sides is left
 /// alone, so it isn't made harsh. A smooth limiter (gain riding, not clipping) keeps peaks in
-/// check without the buzzing a clipper makes. Level 0 leaves the sound untouched.
+/// check without the buzzing a clipper makes. No settings: the sound is left untouched.
 final class ClarityDSP {
-    private var level = -1
+    private var settings: ClaritySettings?
     private var rate = 0.0
     private var lowCutL = Biquad.highPass(48000, 80), lowCutR = Biquad.highPass(48000, 80)
     private var mud = Biquad.highPass(48000, 80), presence = Biquad.highPass(48000, 80), treble = Biquad.highPass(48000, 80)
     private var exciteIn = Biquad.highPass(48000, 80), exciteOut = Biquad.highPass(48000, 80), exciteOut2 = Biquad.highPass(48000, 80)
     private var topCutL = Biquad.highPass(48000, 80), topCutR = Biquad.highPass(48000, 80)
+    private var hiDetect = Biquad.highPass(48000, 3000)
     private var envelope: Float = 0, noiseFloor: Float = 1
     private var attack: Float = 0, release: Float = 0, floorRise: Float = 0, limiterRelease: Float = 0
-    private var mix: Float = 0, midGain: Float = 1, sideGain: Float = 1, outGain: Float = 1
+    private var hiEnv: Float = 0, fullEnv: Float = 0, tameAttack: Float = 0, tameRelease: Float = 0
     private var gain: Float = 1
 
-    func reset() { level = -1 }
+    func reset() { rate = 0 }
 
     /// Processes interleaved stereo samples in place.
-    func process(_ samples: UnsafeMutablePointer<Float>, frames: Int, level newLevel: Int, rate newRate: Double) {
-        guard newLevel > 0 else { return }
-        if newLevel != level || newRate != rate { build(newLevel, newRate) }
+    func process(_ samples: UnsafeMutablePointer<Float>, frames: Int, settings new: ClaritySettings?, rate newRate: Double) {
+        guard let s = new else { return }
+        if newRate != rate { build(newRate) }
+        if s != settings { tune(s) }
+        let mix = s.air, midGain = s.midGain, sideGain = s.sideGain, outGain = s.outGain, tameAmount = s.tame
         for f in 0..<frames {
             let l = lowCutL.run(samples[f * 2])
             let r = lowCutR.run(samples[f * 2 + 1])
-            var mid = (l + r) * 0.5
             let side = (l - r) * 0.5 * sideGain
-            mid = mud.run(mid)
-            mid = presence.run(mid)
+            let base = mud.run((l + r) * 0.5)
+            let lifted = presence.run(base)
             // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
-            let upper = exciteIn.run(mid)
+            let upper = exciteIn.run(lifted)
             let a = abs(upper)
             let k = a > envelope ? attack : release
             let env = max(k * envelope + (1 - k) * a, 1e-6)
@@ -45,8 +87,19 @@ final class ClarityDSP {
             let harmonics = exciteOut2.run(exciteOut.run(upper * upper / env))
             // Only while the sound stands clearly above the background noise (about 10 dB).
             let threshold = max(3 * noiseFloor, 3e-4)
-            mid += harmonics * mix * (env * env / (env * env + threshold * threshold))
-            mid = treble.run(mid) * midGain
+            let bright = treble.run(lifted + harmonics * mix * (env * env / (env * env + threshold * threshold)))
+            var amount: Float = 1
+            if tameAmount > 0 {
+                // Already high-pitched sound (whistles, "s" sounds, strings) gets less of the lift.
+                let hi = abs(hiDetect.run(base))
+                hiEnv = (hi > hiEnv ? tameAttack : tameRelease) * (hiEnv - hi) + hi
+                let full = abs(base)
+                fullEnv = (full > fullEnv ? tameAttack : tameRelease) * (fullEnv - full) + full
+                let ratio = hiEnv / max(fullEnv, 1e-6)
+                let tamed = max(0.15, min(1, 1.25 / (1 + (ratio / 0.4) * (ratio / 0.4))))
+                amount = 1 - tameAmount * (1 - tamed)
+            }
+            let mid = (base + (bright - base) * amount) * midGain
             var outL = topCutL.run(mid + side) * outGain
             var outR = topCutR.run(mid - side) * outGain
             // Smooth limiter: drop the gain at once on a peak, bring it back over ~150 ms.
@@ -60,38 +113,52 @@ final class ClarityDSP {
         }
     }
 
-    private func build(_ level: Int, _ rate: Double) {
-        self.level = level
+    /// New sample rate: every filter from scratch.
+    private func build(_ rate: Double) {
         self.rate = rate
-        let strong = level >= 2
+        settings = nil
         lowCutL = .highPass(rate, 80)
         lowCutR = .highPass(rate, 80)
-        mud = .peak(rate, 300, q: 1, db: strong ? -3 : -2)
-        presence = .peak(rate, 2500, q: 0.9, db: strong ? 6 : 4)
         exciteIn = .highPass(rate, 2500)
         exciteOut = .highPass(rate, 5000)
         exciteOut2 = .highPass(rate, 5000)
-        treble = .highShelf(rate, 6000, db: strong ? 4.5 : 3)
         topCutL = .lowPass(rate, 16000)
         topCutR = .lowPass(rate, 16000)
+        hiDetect = .highPass(rate, 3000)
+        mud = .peak(rate, 300, q: 1, db: 0)
+        presence = .peak(rate, 2500, q: 0.9, db: 0)
+        treble = .highShelf(rate, 6000, db: 0)
         envelope = 0
         noiseFloor = 1
+        hiEnv = 0
+        fullEnv = 0
         gain = 1
         attack = Float(exp(-1 / (0.002 * rate)))
         release = Float(exp(-1 / (0.06 * rate)))
         floorRise = Float(1 / (4 * rate))
         limiterRelease = Float(1 - exp(-1 / (0.15 * rate)))
-        mix = strong ? 0.9 : 0.5
-        midGain = strong ? 1.25 : 1.12
-        sideGain = strong ? 0.85 : 1
-        outGain = strong ? 0.8 : 0.85
+        tameAttack = Float(exp(-1 / (0.005 * rate)))
+        tameRelease = Float(exp(-1 / (0.08 * rate)))
+    }
+
+    /// New slider values: retune the filters but keep their memory, so moving a slider doesn't click.
+    private func tune(_ s: ClaritySettings) {
+        settings = s
+        mud.retune(.peak(rate, 300, q: 1, db: -Double(s.mud)))
+        presence.retune(.peak(rate, 2500, q: 0.9, db: Double(s.dialogue)))
+        treble.retune(.highShelf(rate, 6000, db: Double(s.treble)))
     }
 }
 
 /// One second-order filter (RBJ audio cookbook), with its own memory.
 struct Biquad {
-    let b0, b1, b2, a1, a2: Float
+    private(set) var b0, b1, b2, a1, a2: Float
     var z1: Float = 0, z2: Float = 0
+
+    /// Takes another filter's settings, keeping this one's memory.
+    mutating func retune(_ other: Biquad) {
+        b0 = other.b0; b1 = other.b1; b2 = other.b2; a1 = other.a1; a2 = other.a2
+    }
 
     init(_ b0: Double, _ b1: Double, _ b2: Double, _ a0: Double, _ a1: Double, _ a2: Double) {
         self.b0 = Float(b0 / a0); self.b1 = Float(b1 / a0); self.b2 = Float(b2 / a0)
@@ -145,15 +212,15 @@ final class ClarityOutput {
         var frames: Int { samples.count / 2 }
     }
 
-    /// 0 = untouched, 1 = clearer, 2 = much clearer.
-    var level: Int {
-        get { state.withLockUnchecked { $0.level } }
-        set { state.withLockUnchecked { $0.level = newValue } }
+    /// nil = sound untouched.
+    var settings: ClaritySettings? {
+        get { state.withLockUnchecked { $0.settings } }
+        set { state.withLockUnchecked { $0.settings = newValue } }
     }
 
     private struct State {
         var chunks: [Chunk] = []
-        var level = 0
+        var settings: ClaritySettings?
         var volume: Float = 1
         var muted = false
         var pausedAt: Int64?
@@ -284,8 +351,8 @@ final class ClarityOutput {
     private func receive(_ samples: UnsafePointer<Float>, frames: Int, pts: Int64) {
         guard frames > 0 else { return }
         var copy = Array(UnsafeBufferPointer(start: samples, count: frames * 2))
-        let level = self.level
-        copy.withUnsafeMutableBufferPointer { dsp.process($0.baseAddress!, frames: frames, level: level, rate: rate) }
+        let settings = self.settings
+        copy.withUnsafeMutableBufferPointer { dsp.process($0.baseAddress!, frames: frames, settings: settings, rate: rate) }
         state.withLockUnchecked { s in
             var chunk = Chunk(pts: pts, samples: copy)
             // A piece that arrives while paused was dated before the pause: keep it in line.
