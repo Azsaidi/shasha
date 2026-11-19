@@ -38,6 +38,12 @@ public static class Remote
 
     static async void OnUrlChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
+        try { await Load(d, e); }
+        catch { }
+    }
+
+    static async Task Load(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
         if (d is not Image image) return;
         var url = e.NewValue as string;
         image.Source = null;

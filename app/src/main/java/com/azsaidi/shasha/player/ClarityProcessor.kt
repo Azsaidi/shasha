@@ -24,7 +24,7 @@ import kotlin.math.tanh
  *    makes smooth harmonics an octave up, and mixes in only the new top end. That brings back
  *    the "air" that was lost. It only works while something is actually there (speech, music):
  *    it tracks the background noise and stays quiet below it, so hiss isn't turned into "rain",
- *  - lifts the presence range where speech sits, and the treble,
+ *  - takes out some boxy low-mid "mud", lifts the presence range where speech sits, and the treble,
  *  - in 5.1 sound, turns up the centre (dialogue) channel and turns down the sub,
  *  - a soft limiter so the louder result never clips.
  *
@@ -43,6 +43,7 @@ class ClarityProcessor : BaseAudioProcessor() {
     private lateinit var exciteIn: Array<Biquad>
     private lateinit var exciteOut: Array<Biquad>
     private lateinit var exciteOut2: Array<Biquad>
+    private lateinit var mud: Array<Biquad>
     private lateinit var presence: Array<Biquad>
     private lateinit var treble: Array<Biquad>
     private lateinit var topCut: Array<Biquad>
@@ -73,15 +74,16 @@ class ClarityProcessor : BaseAudioProcessor() {
         exciteIn = Array(channels) { Biquad.highPass(sr, 2500.0, 0.707) }
         exciteOut = Array(channels) { Biquad.highPass(sr, 5000.0, 0.707) }
         exciteOut2 = Array(channels) { Biquad.highPass(sr, 5000.0, 0.707) }
-        presence = Array(channels) { Biquad.peak(sr, 3000.0, 0.7, if (strong) 3.0 else 2.0) }
-        treble = Array(channels) { Biquad.highShelf(sr, 5000.0, if (strong) 6.0 else 4.0) }
+        mud = Array(channels) { Biquad.peak(sr, 300.0, 1.0, if (strong) -3.0 else -2.0) }
+        presence = Array(channels) { Biquad.peak(sr, 2500.0, 0.9, if (strong) 6.0 else 4.0) }
+        treble = Array(channels) { Biquad.highShelf(sr, 6000.0, if (strong) 4.5 else 3.0) }
         topCut = Array(channels) { Biquad.lowPass(sr, 16000.0, 0.707) }
         envelope = FloatArray(channels)
         noiseFloor = FloatArray(channels) { 1f }
         attack = exp(-1.0 / (0.002 * sr)).toFloat()
         release = exp(-1.0 / (0.06 * sr)).toFloat()
         floorRise = (1.0 / (4 * sr)).toFloat()
-        exciteMix = if (strong) 1.4f else 0.8f
+        exciteMix = if (strong) 0.9f else 0.5f
         centreGain = if (strong) 2.0f else 1.4f
         subGain = if (strong) 0.5f else 0.75f
         outGain = if (strong) 0.8f else 0.85f
@@ -123,6 +125,7 @@ class ClarityProcessor : BaseAudioProcessor() {
                     val threshold = maxOf(3 * noiseFloor[c], 3e-4f)
                     val gate = env * env / (env * env + threshold * threshold)
                     y += harmonics * exciteMix * gate
+                    y = mud[c].run(y)
                     y = presence[c].run(y)
                     y = treble[c].run(y)
                     y = topCut[c].run(y)

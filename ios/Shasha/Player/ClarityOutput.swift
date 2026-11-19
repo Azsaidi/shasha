@@ -14,7 +14,7 @@ final class ClarityDSP {
     private var level = -1
     private var rate = 0.0
     private var lowCut = [Biquad](), exciteIn = [Biquad](), exciteOut = [Biquad](), exciteOut2 = [Biquad]()
-    private var presence = [Biquad](), treble = [Biquad](), topCut = [Biquad]()
+    private var mud = [Biquad](), presence = [Biquad](), treble = [Biquad](), topCut = [Biquad]()
     private var envelope: [Float] = [0, 0], noiseFloor: [Float] = [1, 1]
     private var attack: Float = 0, release: Float = 0, floorRise: Float = 0
     private var mix: Float = 0, outGain: Float = 1
@@ -41,6 +41,7 @@ final class ClarityDSP {
                 let threshold = max(3 * noiseFloor[c], 3e-4)
                 let gate = env * env / (env * env + threshold * threshold)
                 y += harmonics * mix * gate
+                y = mud[c].run(y)
                 y = presence[c].run(y)
                 y = treble[c].run(y)
                 y = topCut[c].run(y)
@@ -57,15 +58,16 @@ final class ClarityDSP {
         exciteIn = (0..<2).map { _ in .highPass(rate, 2500) }
         exciteOut = (0..<2).map { _ in .highPass(rate, 5000) }
         exciteOut2 = (0..<2).map { _ in .highPass(rate, 5000) }
-        presence = (0..<2).map { _ in .peak(rate, 3000, q: 0.7, db: strong ? 3 : 2) }
-        treble = (0..<2).map { _ in .highShelf(rate, 5000, db: strong ? 6 : 4) }
+        mud = (0..<2).map { _ in .peak(rate, 300, q: 1, db: strong ? -3 : -2) }
+        presence = (0..<2).map { _ in .peak(rate, 2500, q: 0.9, db: strong ? 6 : 4) }
+        treble = (0..<2).map { _ in .highShelf(rate, 6000, db: strong ? 4.5 : 3) }
         topCut = (0..<2).map { _ in .lowPass(rate, 16000) }
         envelope = [0, 0]
         noiseFloor = [1, 1]
         attack = Float(exp(-1 / (0.002 * rate)))
         release = Float(exp(-1 / (0.06 * rate)))
         floorRise = Float(1 / (4 * rate))
-        mix = strong ? 1.4 : 0.8
+        mix = strong ? 0.9 : 0.5
         outGain = strong ? 0.8 : 0.85
     }
 
@@ -147,6 +149,10 @@ final class ClarityOutput {
         var volume: Float = 1
         var muted = false
         var pausedAt: Int64?
+        /// Playing pieces back to back (false: line up with the clock first).
+        var started = false
+        /// How far the pieces are from when they're due, smoothed (µs).
+        var drift: Double = 0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -312,55 +318,98 @@ final class ClarityOutput {
     // MARK: Audio thread
 
     /// Fills the output with what's due now. Returns false when it was all silence.
+    ///
+    /// Plays the pieces back to back (no jumps while in sync). It lines up with VLC's clock when it
+    /// starts, and only re-aligns when it has drifted well out (> 80 ms on average), fading out and
+    /// back in so there's never a click. Running out of sound fades out too.
     private func render(_ left: UnsafeMutablePointer<Float>, _ right: UnsafeMutablePointer<Float>, frames: Int) -> Bool {
         let now = libvlc_clock() + latency
         let rate = self.rate
+        let fadeFrames = 256
         return state.withLockUnchecked { s in
             var written = 0
-            var heard = false
-            if s.pausedAt == nil {
-                // Line up with the clock: skip what's late, wait for what's early.
-                if var head = s.chunks.first {
-                    let headTime = head.pts + Int64(Double(head.read) / rate * 1_000_000)
-                    let drift = headTime - now
-                    if drift > 40_000 {
-                        written = min(frames, Int(Double(drift) / 1_000_000 * rate))
-                    } else if drift < -40_000 {
-                        var skip = Int(Double(-drift) / 1_000_000 * rate)
-                        while skip > 0, !s.chunks.isEmpty {
-                            head = s.chunks[0]
-                            let remaining = head.frames - head.read
-                            if skip >= remaining {
-                                s.chunks.removeFirst()
-                                skip -= remaining
-                            } else {
-                                s.chunks[0].read += skip
-                                skip = 0
-                            }
-                        }
-                    }
+            defer { for f in written..<frames { left[f] = 0; right[f] = 0 } }
+            guard s.pausedAt == nil, !s.chunks.isEmpty else {
+                s.started = false
+                return false
+            }
+            let head = s.chunks[0]
+            let headTime = head.pts + Int64(Double(head.read) / rate * 1_000_000)
+            let offset = Double(headTime - now)
+            var fadeIn = 0
+            var fadeOutAfter = Int.max
+            if !s.started {
+                if offset > 0 {
+                    // Early: wait until it's due.
+                    let wait = Int(offset / 1_000_000 * rate)
+                    if wait >= frames { return false }
+                    for f in 0..<wait { left[f] = 0; right[f] = 0 }
+                    written = wait
+                } else if offset < -20_000 {
+                    // Late: drop what's already past.
+                    Self.skip(&s.chunks, frames: Int(-offset / 1_000_000 * rate))
+                    if s.chunks.isEmpty { return false }
                 }
-                for f in 0..<written { left[f] = 0; right[f] = 0 }
-                let gain: Float = s.muted ? 0 : s.volume
-                while written < frames, !s.chunks.isEmpty {
-                    let take = min(frames - written, s.chunks[0].frames - s.chunks[0].read)
-                    let start = s.chunks[0].read * 2
-                    s.chunks[0].samples.withUnsafeBufferPointer { buf in
-                        var i = start
-                        for f in written..<(written + take) {
-                            left[f] = buf[i] * gain
-                            right[f] = buf[i + 1] * gain
-                            i += 2
-                        }
-                    }
-                    s.chunks[0].read += take
-                    written += take
-                    heard = true
-                    if s.chunks[0].read >= s.chunks[0].frames { s.chunks.removeFirst() }
+                s.started = true
+                s.drift = 0
+                fadeIn = fadeFrames
+            } else {
+                s.drift = s.drift * 0.95 + offset * 0.05
+                if abs(s.drift) > 80_000 {
+                    // Drifted out of step: fade out now and line up again on the next pass.
+                    fadeOutAfter = 0
+                    s.started = false
                 }
             }
-            for f in written..<frames { left[f] = 0; right[f] = 0 }
-            return heard
+            let gain: Float = s.muted ? 0 : s.volume
+            let firstSound = written
+            var played = 0
+            let limit = fadeOutAfter == Int.max ? frames : min(frames, written + fadeFrames)
+            while written < limit, !s.chunks.isEmpty {
+                let take = min(limit - written, s.chunks[0].frames - s.chunks[0].read)
+                let start = s.chunks[0].read * 2
+                s.chunks[0].samples.withUnsafeBufferPointer { buf in
+                    var i = start
+                    for f in written..<(written + take) {
+                        var g = gain
+                        if played < fadeIn { g *= Float(played) / Float(fadeIn) }
+                        left[f] = buf[i] * g
+                        right[f] = buf[i + 1] * g
+                        i += 2
+                        played += 1
+                    }
+                }
+                s.chunks[0].read += take
+                written += take
+                if s.chunks[0].read >= s.chunks[0].frames { s.chunks.removeFirst() }
+            }
+            let ranOut = written < frames && fadeOutAfter == Int.max
+            if fadeOutAfter != Int.max || ranOut {
+                // Fade the end of what was written so stopping doesn't click.
+                if ranOut { s.started = false }
+                let n = min(fadeFrames, written - firstSound)
+                for k in 0..<n {
+                    let f = written - n + k
+                    let g = Float(n - k) / Float(n)
+                    left[f] *= g
+                    right[f] *= g
+                }
+            }
+            return written > firstSound
+        }
+    }
+
+    private static func skip(_ chunks: inout [Chunk], frames: Int) {
+        var skip = frames
+        while skip > 0, !chunks.isEmpty {
+            let remaining = chunks[0].frames - chunks[0].read
+            if skip >= remaining {
+                chunks.removeFirst()
+                skip -= remaining
+            } else {
+                chunks[0].read += skip
+                skip = 0
+            }
         }
     }
 }

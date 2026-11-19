@@ -122,18 +122,7 @@ public sealed class MultiViewWindow : Window
         var media = item.IsRemote ? new Media(PlayerWindow.Vlc, new Uri(item.Url)) : new Media(PlayerWindow.Vlc, item.Url, FromType.FromPath);
         media.AddOption($":http-user-agent={Http.UserAgent}");
         media.AddOption(":network-caching=2000");
-        void Start()
-        {
-            view.MediaPlayer = player;
-            _ = Task.Run(() => { player.Play(media); media.Dispose(); });
-        }
-        if (view.IsLoaded) Start();
-        else
-        {
-            RoutedEventHandler? once = null;
-            once = (_, _) => { view.Loaded -= once; Dispatcher.InvokeAsync(Start, DispatcherPriority.Background); };
-            view.Loaded += once;
-        }
+        PlayerWindow.WhenVideoReady(view, player, () => _ = Task.Run(() => { player.Play(media); media.Dispose(); }));
         if (_selected == null) Select(tile);
         Downloads.SetStreaming(_tiles.Any(t => t.Item.IsRemote));
         SetControlsVisible(true);

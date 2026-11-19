@@ -27,9 +27,9 @@
     <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
     <FontFamily x:Key="UiFont">Segoe UI Variable Text, Segoe UI</FontFamily>
 
+    <!-- Text colour and font come from the window (inherited), so text inside buttons and icon
+         buttons keeps the button's own colour and icon font. -->
     <Style TargetType="TextBlock">
-        <Setter Property="Foreground" Value="{StaticResource Fg}" />
-        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
         <Setter Property="TextTrimming" Value="CharacterEllipsis" />
     </Style>
 
@@ -225,9 +225,10 @@
                 <ControlTemplate TargetType="TextBox">
                     <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="10" BorderThickness="1" BorderBrush="Transparent">
                         <Grid>
-                            <TextBlock x:Name="Hint" Text="{TemplateBinding Tag}" Foreground="{StaticResource Subtle}" Margin="{TemplateBinding Padding}"
+                            <!-- The text box applies its Padding to the text itself; the hint lines up with it. -->
+                            <TextBlock x:Name="Hint" Text="{TemplateBinding Tag}" Foreground="{StaticResource Subtle}" Margin="14,0,12,0"
                                        VerticalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False" />
-                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
+                            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
@@ -255,7 +256,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="PasswordBox">
                     <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="10" BorderThickness="1" BorderBrush="Transparent">
-                        <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
+                        <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsKeyboardFocused" Value="True">
@@ -358,6 +359,7 @@
 
     <Style TargetType="ToolTip">
         <Setter Property="Foreground" Value="{StaticResource Fg}" />
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ToolTip">

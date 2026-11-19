@@ -45,7 +45,7 @@ public sealed class FavouritesPage : Page
         {
             ItemsSource = items.Select((s, i) => ItemActions.Card(s, i)).ToList(),
             ItemTemplate = Kit.Template(template),
-            ItemsPanel = new ItemsPanelTemplate(new FrameworkElementFactory(typeof(WrapPanel))),
+            ItemsPanel = Kit.Res<ItemsPanelTemplate>("WrapPanel"),
             Focusable = false,
         };
         ItemActions.Wire(grid, (c, _) => ItemActions.Open((StreamItem)c.Model!, channels), c => ItemActions.Menu((StreamItem)c.Model!, channels));

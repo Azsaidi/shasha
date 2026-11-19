@@ -252,9 +252,9 @@ public static class Kit
         ScrollViewer.SetVerticalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
         ScrollViewer.SetCanContentScroll(list, true);
         VirtualizingPanel.SetScrollUnit(list, ScrollUnit.Pixel);
-        var factory = new FrameworkElementFactory(typeof(VirtualizingStackPanel));
-        factory.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
-        list.ItemsPanel = new ItemsPanelTemplate(factory);
+        list.ItemsPanel = Res<ItemsPanelTemplate>("HorizontalPanel");
+        list.HorizontalAlignment = HorizontalAlignment.Stretch;
+        list.HorizontalContentAlignment = HorizontalAlignment.Left;
         // Let the mouse wheel scroll the page, not the shelf (shift+wheel scrolls sideways).
         list.PreviewMouseWheel += (s, e) =>
         {

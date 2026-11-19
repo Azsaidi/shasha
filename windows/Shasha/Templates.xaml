@@ -2,6 +2,14 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:ui="clr-namespace:Shasha.UI">
 
+    <!-- Panels for card lists -->
+    <ItemsPanelTemplate x:Key="HorizontalPanel">
+        <VirtualizingStackPanel Orientation="Horizontal" />
+    </ItemsPanelTemplate>
+    <ItemsPanelTemplate x:Key="WrapPanel">
+        <WrapPanel Orientation="Horizontal" />
+    </ItemsPanelTemplate>
+
     <!-- Film / series poster -->
     <DataTemplate x:Key="PosterTemplate">
         <Button Style="{StaticResource CardButton}" Width="150" Margin="0,0,14,18" Tag="open">

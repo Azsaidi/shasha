@@ -377,9 +377,8 @@ public sealed class PlayerWindow : Window
         media.AddOption($":http-user-agent={Http.UserAgent}");
         media.AddOption(":network-caching=1500");
         var player = _player;
-        WhenVideoReady(() =>
+        WhenVideoReady(_view, player, () =>
         {
-            if (_view.MediaPlayer != player) _view.MediaPlayer = player;
             _ = Task.Run(() =>
             {
                 player.Play(media);
@@ -392,22 +391,34 @@ public sealed class PlayerWindow : Window
         UpdatePlayButton();
     }
 
-    /// <summary>VLC must have the video surface before it starts, or it opens a window of its own.</summary>
-    void WhenVideoReady(Action action)
+    /// <summary>The window VLC draws into, once the video view has made it.</summary>
+    public static IntPtr VideoHandle(VideoView view)
     {
-        if (_view.IsLoaded)
+        view.ApplyTemplate();
+        return (view.Template?.FindName("PART_PlayerHost", view) as System.Windows.Interop.HwndHost)?.Handle ?? IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// VLC must have the video surface before it starts, or it opens a window of its own.
+    /// Waits (up to a few seconds) for the surface, then hands it to VLC and runs the action.
+    /// </summary>
+    public static void WhenVideoReady(VideoView view, MediaPlayer player, Action action)
+    {
+        var tries = 0;
+        async void Check()
         {
+            var handle = VideoHandle(view);
+            if (handle == IntPtr.Zero && tries++ < 100)
+            {
+                await Task.Delay(50);
+                Check();
+                return;
+            }
+            if (view.MediaPlayer != player) view.MediaPlayer = player;
+            if (handle != IntPtr.Zero) player.Hwnd = handle;
             action();
-            return;
         }
-        RoutedEventHandler? once = null;
-        once = (_, _) =>
-        {
-            _view.Loaded -= once;
-            // After the video view has set itself up in its own Loaded handler.
-            Dispatcher.InvokeAsync(action, DispatcherPriority.Background);
-        };
-        _view.Loaded += once;
+        Check();
     }
 
     void SwapPlayer(bool withClarity)

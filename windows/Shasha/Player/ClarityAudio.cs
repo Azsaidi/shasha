@@ -20,7 +20,7 @@ public sealed class ClarityDsp
     int _level = -1;
     double _rate;
     Biquad[] _lowCut = Array.Empty<Biquad>(), _exciteIn = Array.Empty<Biquad>(), _exciteOut = Array.Empty<Biquad>(),
-             _exciteOut2 = Array.Empty<Biquad>(), _presence = Array.Empty<Biquad>(), _treble = Array.Empty<Biquad>(),
+             _exciteOut2 = Array.Empty<Biquad>(), _mud = Array.Empty<Biquad>(), _presence = Array.Empty<Biquad>(), _treble = Array.Empty<Biquad>(),
              _topCut = Array.Empty<Biquad>();
     readonly float[] _envelope = new float[2], _noiseFloor = { 1, 1 };
     float _attack, _release, _floorRise;
@@ -50,6 +50,7 @@ public sealed class ClarityDsp
                 var threshold = MathF.Max(3 * _noiseFloor[c], 3e-4f);
                 var gate = env * env / (env * env + threshold * threshold);
                 y += harmonics * _mix * gate;
+                y = _mud[c].Run(y);
                 y = _presence[c].Run(y);
                 y = _treble[c].Run(y);
                 y = _topCut[c].Run(y);
@@ -68,15 +69,16 @@ public sealed class ClarityDsp
         _exciteIn = Two(() => Biquad.HighPass(rate, 2500));
         _exciteOut = Two(() => Biquad.HighPass(rate, 5000));
         _exciteOut2 = Two(() => Biquad.HighPass(rate, 5000));
-        _presence = Two(() => Biquad.Peak(rate, 3000, 0.7, strong ? 3 : 2));
-        _treble = Two(() => Biquad.HighShelf(rate, 5000, strong ? 6 : 4));
+        _mud = Two(() => Biquad.Peak(rate, 300, 1, strong ? -3 : -2));
+        _presence = Two(() => Biquad.Peak(rate, 2500, 0.9, strong ? 6 : 4));
+        _treble = Two(() => Biquad.HighShelf(rate, 6000, strong ? 4.5 : 3));
         _topCut = Two(() => Biquad.LowPass(rate, 16000));
         _envelope[0] = _envelope[1] = 0;
         _noiseFloor[0] = _noiseFloor[1] = 1;
         _attack = (float)Math.Exp(-1 / (0.002 * rate));
         _release = (float)Math.Exp(-1 / (0.06 * rate));
         _floorRise = (float)(1 / (4 * rate));
-        _mix = strong ? 1.4f : 0.8f;
+        _mix = strong ? 0.9f : 0.5f;
         _outGain = strong ? 0.8f : 0.85f;
     }
 
@@ -148,8 +150,29 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
 {
     const int Rate = 48000;
 
-    [DllImport("libvlc", CallingConvention = CallingConvention.Cdecl)]
-    static extern long libvlc_clock();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate long ClockFn();
+    static ClockFn? _clockFn;
+    static readonly System.Diagnostics.Stopwatch Fallback = System.Diagnostics.Stopwatch.StartNew();
+
+    /// <summary>LibVLC's clock (µs), which VLC dates the sound with. Found in the libvlc.dll VLC already loaded.</summary>
+    static long libvlc_clock()
+    {
+        if (_clockFn == null)
+        {
+            try
+            {
+                var path = System.IO.Path.Combine(AppContext.BaseDirectory, "libvlc", "win-x64", "libvlc.dll");
+                var lib = NativeLibrary.Load(System.IO.File.Exists(path) ? path : "libvlc.dll");
+                _clockFn = Marshal.GetDelegateForFunctionPointer<ClockFn>(NativeLibrary.GetExport(lib, "libvlc_clock"));
+            }
+            catch
+            {
+                _clockFn = () => Fallback.ElapsedTicks * 1_000_000 / System.Diagnostics.Stopwatch.Frequency;
+            }
+        }
+        return _clockFn();
+    }
 
     sealed class Chunk
     {
@@ -208,6 +231,11 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
     void OnPlay(IntPtr data, IntPtr samples, uint count, long pts)
     {
         if (count == 0) return;
+        try { Receive(samples, count, pts); } catch { }
+    }
+
+    void Receive(IntPtr samples, uint count, long pts)
+    {
         var copy = new float[count * 2];
         Marshal.Copy(samples, copy, 0, copy.Length);
         _dsp.Process(copy, Level, Rate);
@@ -241,50 +269,112 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
         _dsp.Reset();
     }
 
-    /// <summary>Audio thread: fills the buffer with what's due now.</summary>
+    bool _started;
+    double _drift;
+
+    /// <summary>
+    /// Audio thread: fills the buffer with what's due now. Plays pieces back to back while in sync,
+    /// lines up with VLC's clock when starting, and only re-aligns (with a fade) after drifting more
+    /// than 80 ms, so there are no clicks.
+    /// </summary>
     public int Read(float[] buffer, int offset, int count)
     {
         var frames = count / 2;
-        var now = libvlc_clock() + _latency;
         var written = 0;
-        lock (_lock)
+        const int fadeFrames = 256;
+        try
         {
-            if (_pausedAt == null && _chunks.Count > 0)
+            var now = libvlc_clock() + _latency;
+            lock (_lock)
             {
-                // Line up with the clock: skip what's late, wait for what's early.
+                if (_pausedAt != null || _chunks.Count == 0) { _started = false; return Silence(); }
                 var head = _chunks[0];
-                var drift = head.Pts + (long)(head.Read * 1_000_000.0 / Rate) - now;
-                if (drift > 40_000)
+                var lead = (double)(head.Pts + (long)(head.Read * 1_000_000.0 / Rate) - now);
+                var fadeIn = 0;
+                var fadeOut = false;
+                if (!_started)
                 {
-                    written = Math.Min(frames, (int)(drift / 1_000_000.0 * Rate));
-                }
-                else if (drift < -40_000)
-                {
-                    var skip = (int)(-drift / 1_000_000.0 * Rate);
-                    while (skip > 0 && _chunks.Count > 0)
+                    if (lead > 0)
                     {
-                        var c = _chunks[0];
-                        var left = c.Frames - c.Read;
-                        if (skip >= left) { _chunks.RemoveAt(0); skip -= left; }
-                        else { c.Read += skip; skip = 0; }
+                        var wait = (int)(lead / 1_000_000 * Rate);
+                        if (wait >= frames) return Silence();
+                        Array.Clear(buffer, offset, wait * 2);
+                        written = wait;
                     }
+                    else if (lead < -20_000)
+                    {
+                        Skip((int)(-lead / 1_000_000 * Rate));
+                        if (_chunks.Count == 0) return Silence();
+                    }
+                    _started = true;
+                    _drift = 0;
+                    fadeIn = fadeFrames;
                 }
-                Array.Clear(buffer, offset, written * 2);
+                else
+                {
+                    _drift = _drift * 0.95 + lead * 0.05;
+                    if (Math.Abs(_drift) > 80_000) { fadeOut = true; _started = false; }
+                }
                 var gain = _muted ? 0 : _volume;
-                while (written < frames && _chunks.Count > 0)
+                var first = written;
+                var played = 0;
+                var limit = fadeOut ? Math.Min(frames, written + fadeFrames) : frames;
+                while (written < limit && _chunks.Count > 0)
                 {
                     var c = _chunks[0];
-                    var take = Math.Min(frames - written, c.Frames - c.Read);
+                    var take = Math.Min(limit - written, c.Frames - c.Read);
                     var src = c.Read * 2;
                     var dst = offset + written * 2;
-                    for (var i = 0; i < take * 2; i++) buffer[dst + i] = c.Samples[src + i] * gain;
+                    for (var i = 0; i < take; i++)
+                    {
+                        var g = played < fadeIn ? gain * played / fadeIn : gain;
+                        buffer[dst + i * 2] = c.Samples[src + i * 2] * g;
+                        buffer[dst + i * 2 + 1] = c.Samples[src + i * 2 + 1] * g;
+                        played++;
+                    }
                     c.Read += take;
                     written += take;
                     if (c.Read >= c.Frames) _chunks.RemoveAt(0);
                 }
+                var ranOut = written < frames && !fadeOut;
+                if (ranOut) _started = false;
+                if (fadeOut || ranOut)
+                {
+                    // Fade the end of what was written so stopping doesn't click.
+                    var n = Math.Min(fadeFrames, written - first);
+                    for (var k = 0; k < n; k++)
+                    {
+                        var at = offset + (written - n + k) * 2;
+                        var g = (float)(n - k) / n;
+                        buffer[at] *= g;
+                        buffer[at + 1] *= g;
+                    }
+                }
             }
+        }
+        catch
+        {
+            // Never let the sound device stop: play silence for this pass instead.
         }
         if (written < frames) Array.Clear(buffer, offset + written * 2, (frames - written) * 2);
         return count;
+
+        int Silence()
+        {
+            Array.Clear(buffer, offset, count);
+            written = frames;
+            return count;
+        }
+    }
+
+    void Skip(int frames)
+    {
+        while (frames > 0 && _chunks.Count > 0)
+        {
+            var c = _chunks[0];
+            var left = c.Frames - c.Read;
+            if (frames >= left) { _chunks.RemoveAt(0); frames -= left; }
+            else { c.Read += frames; frames = 0; }
+        }
     }
 }
