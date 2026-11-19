@@ -450,6 +450,7 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
     private var currentURL: URL?
     /// Our own sound path for "Clearer sound" (VLC's equalizer can't bring back lost treble).
     private var clarityOutput: ClarityOutput?
+    private var usedEqualizer = false
 
     var view: UIView { surface }
     var onState: ((EngineState) -> Void)?
@@ -643,13 +644,18 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         }
         if let clarityOutput {
             clarityOutput.settings = settings
-            player.equalizer = nil
+            if usedEqualizer {
+                usedEqualizer = false
+                player.equalizer = nil
+            }
             return
         }
         guard let settings else {
-            player.equalizer = nil
+            if usedEqualizer { player.equalizer = nil }
+            usedEqualizer = false
             return
         }
+        usedEqualizer = true
         let level = settings.dialogue >= 5 ? 2 : 1
         // Fallback when our own sound path isn't available: VLC's equalizer.
         let eq = VLCAudioEqualizer()

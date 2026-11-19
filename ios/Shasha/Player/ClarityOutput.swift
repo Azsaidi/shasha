@@ -251,6 +251,10 @@ final class ClarityOutput {
             let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
             if raw == AVAudioSession.InterruptionType.ended.rawValue { self?.restart() }
         })
+        // AirPods taken out, headphones plugged in, AirPlay: the sound moves to another output.
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.restart()
+        })
     }
 
     deinit {
@@ -382,11 +386,21 @@ final class ClarityOutput {
         dsp.reset()
     }
 
+    /// After the output changes (AirPods out, speaker in) the engine stops itself: connect the
+    /// sound to the new output again, start, and line up with VLC's clock afresh.
     private func restart() {
         queue.async { [self] in
-            guard source != nil, !engine.isRunning else { return }
-            try? AVAudioSession.sharedInstance().setActive(true)
-            try? engine.start()
+            guard let source else { return }
+            let session = AVAudioSession.sharedInstance()
+            try? session.setActive(true)
+            if !engine.isRunning, let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2) {
+                engine.disconnectNodeOutput(source)
+                engine.connect(source, to: engine.mainMixerNode, format: format)
+                engine.prepare()
+                try? engine.start()
+            }
+            latency = Int64((session.outputLatency + session.ioBufferDuration) * 1_000_000)
+            state.withLockUnchecked { $0.started = false }
         }
     }
 

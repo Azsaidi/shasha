@@ -507,14 +507,22 @@ struct TracksSheet: View {
 }
 
 /// Clearer sound: presets and sliders, applied as you move them, saved for this title.
+/// Keeps its own copy of the settings and doesn't follow the player's every update, so the
+/// sliders stay smooth while the video plays.
 struct SoundSheet: View {
-    @ObservedObject var model: PlayerModel
+    let model: PlayerModel
     @Environment(\.dismiss) private var dismiss
+    @State private var settings: ClaritySettings?
+
+    init(model: PlayerModel) {
+        self.model = model
+        _settings = State(initialValue: model.clarity)
+    }
 
     private enum Choice: Hashable { case off, clearer, much, custom }
 
     private var choice: Choice {
-        guard let s = model.clarity else { return .off }
+        guard let s = settings else { return .off }
         if s == .clearer { return .clearer }
         if s == .muchClearer { return .much }
         return .custom
@@ -535,17 +543,17 @@ struct SoundSheet: View {
                     Text(L("sound_hint"))
                 }
                 Section {
-                    slider(L("sound_dialogue"), \.dialogue, 0...10, unit: "dB")
-                    slider(L("sound_air"), \.air, 0...1.5)
-                    slider(L("sound_treble"), \.treble, 0...8, unit: "dB")
-                    slider(L("sound_mud"), \.mud, 0...6, unit: "dB")
-                    slider(L("sound_focus"), \.focus, 0...1)
-                    slider(L("sound_tame"), \.tame, 0...1)
+                    SoundSlider(title: L("sound_dialogue"), unit: "dB", range: 0...10, value: binding(\.dialogue), done: save)
+                    SoundSlider(title: L("sound_air"), unit: nil, range: 0...1.5, value: binding(\.air), done: save)
+                    SoundSlider(title: L("sound_treble"), unit: "dB", range: 0...8, value: binding(\.treble), done: save)
+                    SoundSlider(title: L("sound_mud"), unit: "dB", range: 0...6, value: binding(\.mud), done: save)
+                    SoundSlider(title: L("sound_focus"), unit: nil, range: 0...1, value: binding(\.focus), done: save)
+                    SoundSlider(title: L("sound_tame"), unit: nil, range: 0...1, value: binding(\.tame), done: save)
                 }
-                .disabled(model.clarity == nil)
+                .disabled(settings == nil)
                 Section {
-                    Button(L("sound_reset")) { model.setClarity(.clearer) }
-                        .disabled(model.clarity == nil || model.clarity == .clearer)
+                    Button(L("sound_reset")) { pick(.clearer) }
+                        .disabled(settings == nil || settings == .clearer)
                 }
             }
             .navigationTitle(L("sound_title"))
@@ -555,35 +563,57 @@ struct SoundSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .onDisappear(perform: save)
+    }
+
+    private func binding(_ key: WritableKeyPath<ClaritySettings, Float>) -> Binding<Float> {
+        Binding(
+            get: { (settings ?? .clearer)[keyPath: key] },
+            set: { v in
+                guard var s = settings else { return }
+                s[keyPath: key] = (v * 10).rounded() / 10
+                guard s != settings else { return }
+                settings = s
+                model.previewClarity(s)
+            }
+        )
+    }
+
+    /// Saves (and shows on the Sound button) once a slider is let go.
+    private func save() {
+        if settings != model.clarity { model.setClarity(settings) }
     }
 
     private func pick(_ c: Choice) {
         switch c {
-        case .off: model.setClarity(nil)
-        case .clearer: model.setClarity(.clearer)
-        case .much: model.setClarity(.muchClearer)
-        case .custom: break
+        case .off: settings = nil
+        case .clearer: settings = .clearer
+        case .much: settings = .muchClearer
+        case .custom: return
         }
+        model.setClarity(settings)
     }
+}
 
-    private func slider(_ title: String, _ key: WritableKeyPath<ClaritySettings, Float>, _ range: ClosedRange<Float>, unit: String? = nil) -> some View {
-        let current = model.clarity ?? .clearer
-        let value = current[keyPath: key]
-        let text = unit == nil ? String(format: "%.0f%%", value / range.upperBound * 100) : String(format: "%.1f \(unit!)", value)
-        return VStack(alignment: .leading, spacing: 4) {
+private struct SoundSlider: View {
+    let title: String
+    let unit: String?
+    let range: ClosedRange<Float>
+    @Binding var value: Float
+    let done: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)
                 Spacer()
-                Text(text).foregroundStyle(.secondary).monospacedDigit()
+                Text(unit == nil ? String(format: "%.0f%%", value / range.upperBound * 100) : String(format: "%.1f %@", value, unit!))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
-            Slider(value: Binding(
-                get: { (model.clarity ?? .clearer)[keyPath: key] },
-                set: { v in
-                    var s = model.clarity ?? .clearer
-                    s[keyPath: key] = (v * 10).rounded() / 10
-                    model.setClarity(s)
-                }
-            ), in: range)
+            Slider(value: $value, in: range) { editing in
+                if !editing { done() }
+            }
         }
     }
 }

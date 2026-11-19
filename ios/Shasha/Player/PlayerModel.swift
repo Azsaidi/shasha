@@ -291,6 +291,12 @@ final class PlayerModel: ObservableObject, Identifiable {
         L(settings?.labelKey ?? "clarity_0")
     }
 
+    /// While a slider moves: change the sound only (nothing saved or redrawn, so it stays smooth).
+    func previewClarity(_ settings: ClaritySettings) {
+        guard clarity != nil, let engine, engine.supportsClarity else { return }
+        engine.setClarity(settings)
+    }
+
     /// From the Sound panel: applies straight away and is saved for this series / film / channel.
     func setClarity(_ settings: ClaritySettings?) {
         guard let item = current, let engine else { return }
