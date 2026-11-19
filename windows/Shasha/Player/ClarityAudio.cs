@@ -5,26 +5,26 @@ using NAudio.Wave;
 namespace Shasha.Player;
 
 /// <summary>
-/// "Clearer sound" for dull, muffled soundtracks.
+/// "Clearer sound" for dull, muffled soundtracks. Same processing as the phone apps.
 ///
-/// An equaliser can only turn up treble that is in the file. Badly encoded episodes have had their
-/// top end cut off, so there is nothing to turn up. This rebuilds it instead: cuts the boomy low
-/// end, squares the upper mids (scaled to their own level) to make smooth harmonics an octave up
-/// and mixes those in (an exciter) to recreate the missing "air", lifts the speech range and the
-/// treble, and rounds off peaks so the result never clips. The exciter tracks the background
-/// noise and only works above it, so hiss isn't turned into "rain".
-/// Level 0 leaves the sound untouched. Same processing as the phone apps.
+/// Dialogue sits in the middle of a stereo mix; music and effects are spread to the sides. So the
+/// sound is split into its middle (L+R) and sides (L−R), and only the middle is worked on: less
+/// boxy low-mid "mud", a lift where speech is understood (2–3 kHz), an exciter that recreates the
+/// "air" a bad encode cut off (only above the background noise, so hiss isn't turned into "rain"),
+/// and a little treble. The middle is then turned up against the sides; music on the sides is left
+/// alone. A smooth limiter (gain riding, not clipping) keeps peaks in check without buzzing.
+/// Level 0 leaves the sound untouched.
 /// </summary>
 public sealed class ClarityDsp
 {
     int _level = -1;
     double _rate;
-    Biquad[] _lowCut = Array.Empty<Biquad>(), _exciteIn = Array.Empty<Biquad>(), _exciteOut = Array.Empty<Biquad>(),
-             _exciteOut2 = Array.Empty<Biquad>(), _mud = Array.Empty<Biquad>(), _presence = Array.Empty<Biquad>(), _treble = Array.Empty<Biquad>(),
-             _topCut = Array.Empty<Biquad>();
-    readonly float[] _envelope = new float[2], _noiseFloor = { 1, 1 };
-    float _attack, _release, _floorRise;
-    float _mix, _outGain = 1;
+    Biquad _lowCutL = Biquad.HighPass(48000, 80), _lowCutR = Biquad.HighPass(48000, 80), _mud = Biquad.HighPass(48000, 80),
+           _presence = Biquad.HighPass(48000, 80), _treble = Biquad.HighPass(48000, 80), _exciteIn = Biquad.HighPass(48000, 80),
+           _exciteOut = Biquad.HighPass(48000, 80), _exciteOut2 = Biquad.HighPass(48000, 80),
+           _topCutL = Biquad.HighPass(48000, 80), _topCutR = Biquad.HighPass(48000, 80);
+    float _envelope, _noiseFloor = 1, _attack, _release, _floorRise, _limiterRelease;
+    float _mix, _midGain = 1, _sideGain = 1, _outGain = 1, _gain = 1;
 
     public void Reset() => _level = -1;
 
@@ -35,27 +35,32 @@ public sealed class ClarityDsp
         if (level != _level || rate != _rate) Build(level, rate);
         for (var i = 0; i + 1 < samples.Length; i += 2)
         {
-            for (var c = 0; c < 2; c++)
-            {
-                var y = _lowCut[c].Run(samples[i + c]);
-                var upper = _exciteIn[c].Run(y);
-                // How loud the upper mids are, and the background noise level under them.
-                var a = MathF.Abs(upper);
-                var k = a > _envelope[c] ? _attack : _release;
-                var env = MathF.Max(k * _envelope[c] + (1 - k) * a, 1e-6f);
-                _envelope[c] = env;
-                _noiseFloor[c] = env < _noiseFloor[c] ? env : _noiseFloor[c] + (env - _noiseFloor[c]) * _floorRise;
-                var harmonics = _exciteOut2[c].Run(_exciteOut[c].Run(upper * upper / env));
-                // Only add them while the sound stands clearly above the noise (about 10 dB).
-                var threshold = MathF.Max(3 * _noiseFloor[c], 3e-4f);
-                var gate = env * env / (env * env + threshold * threshold);
-                y += harmonics * _mix * gate;
-                y = _mud[c].Run(y);
-                y = _presence[c].Run(y);
-                y = _treble[c].Run(y);
-                y = _topCut[c].Run(y);
-                samples[i + c] = Limit(y * _outGain);
-            }
+            var l = _lowCutL.Run(samples[i]);
+            var r = _lowCutR.Run(samples[i + 1]);
+            var mid = (l + r) * 0.5f;
+            var side = (l - r) * 0.5f * _sideGain;
+            mid = _mud.Run(mid);
+            mid = _presence.Run(mid);
+            // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
+            var upper = _exciteIn.Run(mid);
+            var a = MathF.Abs(upper);
+            var k = a > _envelope ? _attack : _release;
+            var env = MathF.Max(k * _envelope + (1 - k) * a, 1e-6f);
+            _envelope = env;
+            _noiseFloor = env < _noiseFloor ? env : _noiseFloor + (env - _noiseFloor) * _floorRise;
+            var harmonics = _exciteOut2.Run(_exciteOut.Run(upper * upper / env));
+            // Only while the sound stands clearly above the background noise (about 10 dB).
+            var threshold = MathF.Max(3 * _noiseFloor, 3e-4f);
+            mid += harmonics * _mix * (env * env / (env * env + threshold * threshold));
+            mid = _treble.Run(mid) * _midGain;
+            var outL = _topCutL.Run(mid + side) * _outGain;
+            var outR = _topCutR.Run(mid - side) * _outGain;
+            // Smooth limiter: drop the gain at once on a peak, bring it back over ~150 ms.
+            var peak = MathF.Max(MathF.Abs(outL), MathF.Abs(outR));
+            var target = peak > 0.89f ? 0.89f / peak : 1f;
+            if (target < _gain) _gain = target; else _gain += (target - _gain) * _limiterRelease;
+            samples[i] = Math.Clamp(outL * _gain, -1f, 1f);
+            samples[i + 1] = Math.Clamp(outR * _gain, -1f, 1f);
         }
     }
 
@@ -64,31 +69,27 @@ public sealed class ClarityDsp
         _level = level;
         _rate = rate;
         var strong = level >= 2;
-        Biquad[] Two(Func<Biquad> make) => new[] { make(), make() };
-        _lowCut = Two(() => Biquad.HighPass(rate, 80));
-        _exciteIn = Two(() => Biquad.HighPass(rate, 2500));
-        _exciteOut = Two(() => Biquad.HighPass(rate, 5000));
-        _exciteOut2 = Two(() => Biquad.HighPass(rate, 5000));
-        _mud = Two(() => Biquad.Peak(rate, 300, 1, strong ? -3 : -2));
-        _presence = Two(() => Biquad.Peak(rate, 2500, 0.9, strong ? 6 : 4));
-        _treble = Two(() => Biquad.HighShelf(rate, 6000, strong ? 4.5 : 3));
-        _topCut = Two(() => Biquad.LowPass(rate, 16000));
-        _envelope[0] = _envelope[1] = 0;
-        _noiseFloor[0] = _noiseFloor[1] = 1;
+        _lowCutL = Biquad.HighPass(rate, 80);
+        _lowCutR = Biquad.HighPass(rate, 80);
+        _mud = Biquad.Peak(rate, 300, 1, strong ? -3 : -2);
+        _presence = Biquad.Peak(rate, 2500, 0.9, strong ? 6 : 4);
+        _exciteIn = Biquad.HighPass(rate, 2500);
+        _exciteOut = Biquad.HighPass(rate, 5000);
+        _exciteOut2 = Biquad.HighPass(rate, 5000);
+        _treble = Biquad.HighShelf(rate, 6000, strong ? 4.5 : 3);
+        _topCutL = Biquad.LowPass(rate, 16000);
+        _topCutR = Biquad.LowPass(rate, 16000);
+        _envelope = 0;
+        _noiseFloor = 1;
+        _gain = 1;
         _attack = (float)Math.Exp(-1 / (0.002 * rate));
         _release = (float)Math.Exp(-1 / (0.06 * rate));
         _floorRise = (float)(1 / (4 * rate));
+        _limiterRelease = (float)(1 - Math.Exp(-1 / (0.15 * rate)));
         _mix = strong ? 0.9f : 0.5f;
+        _midGain = strong ? 1.25f : 1.12f;
+        _sideGain = strong ? 0.85f : 1f;
         _outGain = strong ? 0.8f : 0.85f;
-    }
-
-    /// <summary>Leaves quiet sound alone and rounds off peaks instead of clipping them.</summary>
-    static float Limit(float x)
-    {
-        var a = MathF.Abs(x);
-        if (a <= 0.7f) return x;
-        var shaped = 0.7f + 0.3f * MathF.Tanh((a - 0.7f) / 0.3f);
-        return x < 0 ? -shaped : shaped;
     }
 
     /// <summary>One second-order filter (RBJ audio cookbook), with its own memory.</summary>
@@ -228,7 +229,7 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
         _volumeCb = (_, volume, mute) => { lock (_lock) { _volume = volume; _muted = mute; } };
         player.SetAudioFormat("FL32", Rate, 2);
         player.SetAudioCallbacks(_play, _pause, _resume, _flush, _drain);
-        player.SetVolumeCallback(_volumeCb);
+        // No volume callback: VLC then applies the volume to the samples itself.
         const int latencyMs = 80;
         _out = new WasapiOut(NAudio.CoreAudioApi.AudioClientShareMode.Shared, true, latencyMs);
         _latency = latencyMs * 1000L;
@@ -265,7 +266,10 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
         }
         var copy = new float[count * 2];
         Marshal.Copy(samples, copy, 0, copy.Length);
+        var before = Peak(copy);
         _dsp.Process(copy, Level, Rate);
+        if (_traced <= 8 || (_pieces++ % 500 == 0 && _pieces < 5000))
+            Core.Trace.Write($"clarity: level in {before:0.000} out {Peak(copy):0.000} (setting {Level})");
         lock (_lock)
         {
             var chunk = new Chunk { Pts = pts, Samples = copy };
@@ -274,6 +278,15 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
             _chunks.Add(chunk);
             if (_chunks.Count > 400) _chunks.RemoveRange(0, _chunks.Count - 400);
         }
+    }
+
+    int _pieces;
+
+    static float Peak(float[] samples)
+    {
+        var p = 0f;
+        foreach (var v in samples) p = float.IsNaN(v) ? float.NaN : MathF.Max(p, MathF.Abs(v));
+        return p;
     }
 
     void SetPaused(bool paused)
@@ -298,6 +311,7 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
 
     bool _started;
     double _drift;
+    int _reads;
     int _starts;
 
     /// <summary>
@@ -399,6 +413,12 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
             if (_starts < 10) { _starts++; Core.Trace.Write("clarity: read failed " + e.Message); }
         }
         if (written < frames) Array.Clear(buffer, offset + written * 2, (frames - written) * 2);
+        if (_reads++ % 400 == 0 && _reads < 4000)
+        {
+            var peak = 0f;
+            for (var i = offset; i < offset + count; i++) peak = MathF.Max(peak, MathF.Abs(buffer[i]));
+            Core.Trace.Write($"clarity: to speakers {peak:0.000}, gain {(_muted ? 0 : _volume):0.00}, started {_started}, {_chunks.Count} waiting");
+        }
         return count;
 
         int Silence()

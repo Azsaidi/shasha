@@ -301,11 +301,31 @@ public sealed class PlayerWindow : Window
     MediaPlayer NewPlayer(bool withClarity)
     {
         var p = new MediaPlayer(Vlc) { EnableHardwareDecoding = true, EnableKeyInput = false, EnableMouseInput = false };
-        p.Playing += (_, _) => Ui.Post(OnPlaying);
-        p.Paused += (_, _) => Ui.Post(UpdatePlayButton);
-        p.EndReached += (_, _) => Ui.Post(OnEnded);
-        p.EncounteredError += (_, _) => Ui.Post(() => ShowError(_hadPlayback ? L("err_stream_network") : L("err_stream_generic", "VLC")));
-        p.Buffering += (_, e) => Ui.Post(() => _spinner.Visibility = e.Cache < 100 && !_hadPlayback ? Visibility.Visible : Visibility.Collapsed);
+        p.Playing += (_, _) => Ui.Post(() => { if (p == _player) OnPlaying(); });
+        p.Paused += (_, _) => Ui.Post(() => { if (p == _player) UpdatePlayButton(); });
+        p.EndReached += (_, _) => Ui.Post(() => { if (p == _player) OnEnded(); });
+        p.EncounteredError += (_, _) => Ui.Post(() =>
+        {
+            if (p != _player || _closing) return;
+            // Often the provider hasn't let go of the previous stream yet: try again shortly.
+            if (!_hadPlayback && _autoRetries < 2)
+            {
+                _autoRetries++;
+                Core.Trace.Write($"player: error, retrying ({_autoRetries})");
+                var index = _index;
+                var at = Math.Max(_lastPosition, _resumeTarget);
+                _ = Task.Delay(2500).ContinueWith(_ => Ui.Post(() =>
+                {
+                    if (!_closing && _index == index && !_hadPlayback) Load(index, Current?.IsLive == true ? 0 : at, retry: true);
+                }));
+                return;
+            }
+            ShowError(_hadPlayback ? L("err_stream_network") : L("err_stream_generic", "VLC"));
+        });
+        p.Buffering += (_, e) => Ui.Post(() =>
+        {
+            if (p == _player) _spinner.Visibility = e.Cache < 100 && !_hadPlayback ? Visibility.Visible : Visibility.Collapsed;
+        });
         if (withClarity) _clarity = new ClarityAudio(p) { Level = 0 };
         p.Volume = Store.Settings.Volume;
         return p;
@@ -334,7 +354,9 @@ public sealed class PlayerWindow : Window
         return e != null && !e.Finished && e.Position > 10 ? e.Position : 0;
     }
 
-    void Load(int index, double? start = null)
+    int _autoRetries;
+
+    void Load(int index, double? start = null, bool retry = false)
     {
         if (index < 0 || index >= _items.Count) return;
         _index = index;
@@ -368,8 +390,16 @@ public sealed class PlayerWindow : Window
         // "Clearer sound" needs our own sound path; VLC only takes it on a new player.
         var level = Store.Clarity(ClarityKey(item));
         Core.Trace.Write($"player: load {item.Kind} {item.StreamId} remote={item.IsRemote} clarity={level} start={_resumeTarget:0}");
-        if (level > 0 && _clarity == null) SwapPlayer(withClarity: true);
+        // A fresh player for each stream when we handle the sound ourselves (VLC switching streams
+        // on such a player could crash), and back to VLC's own sound when it's off.
+        if (level > 0 || _clarity != null) SwapPlayer(withClarity: level > 0);
+        else
+        {
+            var previous = _player;
+            Background(() => previous.Stop());
+        }
         if (_clarity != null) _clarity.Level = level;
+        if (!retry) _autoRetries = 0;
         _clarityButton.Content = L($"clarity_{level}");
 
         var media = item.IsRemote
@@ -378,14 +408,11 @@ public sealed class PlayerWindow : Window
         media.AddOption($":http-user-agent={Http.UserAgent}");
         media.AddOption(":network-caching=1500");
         var player = _player;
-        WhenVideoReady(_view, player, () =>
+        WhenVideoReady(_view, player, () => Background(() =>
         {
-            _ = Task.Run(() =>
-            {
-                player.Play(media);
-                media.Dispose();
-            });
-        });
+            player.Play(media);
+            media.Dispose();
+        }));
         Downloads.SetStreaming(item.IsRemote);
         LoadEpg(item);
         ShowControls();
@@ -430,12 +457,27 @@ public sealed class PlayerWindow : Window
         _clarity = null;
         _player = NewPlayer(withClarity);
         _view.MediaPlayer = _player;
-        _ = Task.Run(() =>
+        Background(() =>
         {
             try { old.Stop(); } catch { }
             old.Dispose();
             oldClarity?.Dispose();
         });
+    }
+
+    static Task _work = Task.CompletedTask;
+
+    /// <summary>
+    /// VLC work off the UI thread, one step after another: the old stream is always fully closed
+    /// before the next opens (plans with one connection refuse a second one).
+    /// </summary>
+    public static void Background(Action action)
+    {
+        _work = _work.ContinueWith(_ =>
+        {
+            try { action(); }
+            catch (Exception e) { Core.Trace.Write("player: background step failed " + e.Message); }
+        }, TaskScheduler.Default);
     }
 
     void OnPlaying()
@@ -698,18 +740,15 @@ public sealed class PlayerWindow : Window
         Store.SetClarity(ClarityKey(item), level);
         _clarityButton.Content = L($"clarity_{level}");
         Toast.Show(L($"clarity_{level}"));
-        if (_clarity != null)
+        if (_clarity != null && level > 0)
         {
             _clarity.Level = level;
             return;
         }
-        if (level > 0)
-        {
-            // Continue from the same spot through our own sound path.
-            var at = item.IsLive ? 0 : _player.Time / 1000.0;
-            SaveCurrent();
-            Load(_index, at);
-        }
+        // Switching between VLC's own sound and ours: continue from the same spot.
+        var at = item.IsLive ? 0 : _player.Time / 1000.0;
+        SaveCurrent();
+        Load(_index, at);
     }
 
     void ShowTracks(Button anchor)
@@ -949,7 +988,7 @@ public sealed class PlayerWindow : Window
         var clarity = _clarity;
         _view.MediaPlayer = null;
         // Stopping VLC can take a moment on a stalled stream: don't hold up the window.
-        _ = Task.Run(() =>
+        Background(() =>
         {
             try { player.Stop(); } catch { }
             player.Dispose();

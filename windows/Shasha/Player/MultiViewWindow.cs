@@ -122,7 +122,7 @@ public sealed class MultiViewWindow : Window
         var media = item.IsRemote ? new Media(PlayerWindow.Vlc, new Uri(item.Url)) : new Media(PlayerWindow.Vlc, item.Url, FromType.FromPath);
         media.AddOption($":http-user-agent={Http.UserAgent}");
         media.AddOption(":network-caching=2000");
-        PlayerWindow.WhenVideoReady(view, player, () => _ = Task.Run(() => { player.Play(media); media.Dispose(); }));
+        PlayerWindow.WhenVideoReady(view, player, () => PlayerWindow.Background(() => { player.Play(media); media.Dispose(); }));
         if (_selected == null) Select(tile);
         Downloads.SetStreaming(_tiles.Any(t => t.Item.IsRemote));
         SetControlsVisible(true);
@@ -160,7 +160,7 @@ public sealed class MultiViewWindow : Window
         _grid.Children.Remove(tile.View);
         var player = tile.Player;
         tile.View.MediaPlayer = null;
-        _ = Task.Run(() =>
+        PlayerWindow.Background(() =>
         {
             try { player.Stop(); } catch { }
             player.Dispose();

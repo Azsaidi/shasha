@@ -3,21 +3,24 @@ import os
 
 /// "Clearer sound" for dull, muffled soundtracks.
 ///
-/// An equaliser can only turn up treble that is in the file. Badly encoded episodes have had
-/// their top end cut off, so there is nothing to turn up. This rebuilds it instead: cuts the
-/// boomy low end, squares the upper mids (scaled to their own level) to make smooth harmonics an
-/// octave up and mixes those in (an exciter) to recreate the missing "air", lifts the speech
-/// range and the treble, and rounds off peaks so the result never clips. The exciter tracks the
-/// background noise and only works above it, so hiss isn't turned into "rain".
-/// Level 0 leaves the sound untouched.
+/// Dialogue sits in the middle of a stereo mix; music and effects are spread to the sides. So the
+/// sound is split into its middle (L+R) and sides (L−R), and only the middle is worked on: less
+/// boxy low-mid "mud", a lift where speech is understood (2–3 kHz), an exciter that recreates the
+/// "air" a bad encode cut off (only above the background noise, so hiss isn't turned into "rain"),
+/// and a little treble. The middle is then turned up against the sides. Music on the sides is left
+/// alone, so it isn't made harsh. A smooth limiter (gain riding, not clipping) keeps peaks in
+/// check without the buzzing a clipper makes. Level 0 leaves the sound untouched.
 final class ClarityDSP {
     private var level = -1
     private var rate = 0.0
-    private var lowCut = [Biquad](), exciteIn = [Biquad](), exciteOut = [Biquad](), exciteOut2 = [Biquad]()
-    private var mud = [Biquad](), presence = [Biquad](), treble = [Biquad](), topCut = [Biquad]()
-    private var envelope: [Float] = [0, 0], noiseFloor: [Float] = [1, 1]
-    private var attack: Float = 0, release: Float = 0, floorRise: Float = 0
-    private var mix: Float = 0, outGain: Float = 1
+    private var lowCutL = Biquad.highPass(48000, 80), lowCutR = Biquad.highPass(48000, 80)
+    private var mud = Biquad.highPass(48000, 80), presence = Biquad.highPass(48000, 80), treble = Biquad.highPass(48000, 80)
+    private var exciteIn = Biquad.highPass(48000, 80), exciteOut = Biquad.highPass(48000, 80), exciteOut2 = Biquad.highPass(48000, 80)
+    private var topCutL = Biquad.highPass(48000, 80), topCutR = Biquad.highPass(48000, 80)
+    private var envelope: Float = 0, noiseFloor: Float = 1
+    private var attack: Float = 0, release: Float = 0, floorRise: Float = 0, limiterRelease: Float = 0
+    private var mix: Float = 0, midGain: Float = 1, sideGain: Float = 1, outGain: Float = 1
+    private var gain: Float = 1
 
     func reset() { level = -1 }
 
@@ -26,27 +29,34 @@ final class ClarityDSP {
         guard newLevel > 0 else { return }
         if newLevel != level || newRate != rate { build(newLevel, newRate) }
         for f in 0..<frames {
-            for c in 0..<2 {
-                let i = f * 2 + c
-                var y = lowCut[c].run(samples[i])
-                let upper = exciteIn[c].run(y)
-                // How loud the upper mids are, and the background noise level under them.
-                let a = abs(upper)
-                let k = a > envelope[c] ? attack : release
-                let env = max(k * envelope[c] + (1 - k) * a, 1e-6)
-                envelope[c] = env
-                noiseFloor[c] = env < noiseFloor[c] ? env : noiseFloor[c] + (env - noiseFloor[c]) * floorRise
-                let harmonics = exciteOut2[c].run(exciteOut[c].run(upper * upper / env))
-                // Only add them while the sound stands clearly above the noise (about 10 dB).
-                let threshold = max(3 * noiseFloor[c], 3e-4)
-                let gate = env * env / (env * env + threshold * threshold)
-                y += harmonics * mix * gate
-                y = mud[c].run(y)
-                y = presence[c].run(y)
-                y = treble[c].run(y)
-                y = topCut[c].run(y)
-                samples[i] = ClarityDSP.limit(y * outGain)
-            }
+            let l = lowCutL.run(samples[f * 2])
+            let r = lowCutR.run(samples[f * 2 + 1])
+            var mid = (l + r) * 0.5
+            let side = (l - r) * 0.5 * sideGain
+            mid = mud.run(mid)
+            mid = presence.run(mid)
+            // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
+            let upper = exciteIn.run(mid)
+            let a = abs(upper)
+            let k = a > envelope ? attack : release
+            let env = max(k * envelope + (1 - k) * a, 1e-6)
+            envelope = env
+            noiseFloor = env < noiseFloor ? env : noiseFloor + (env - noiseFloor) * floorRise
+            let harmonics = exciteOut2.run(exciteOut.run(upper * upper / env))
+            // Only while the sound stands clearly above the background noise (about 10 dB).
+            let threshold = max(3 * noiseFloor, 3e-4)
+            mid += harmonics * mix * (env * env / (env * env + threshold * threshold))
+            mid = treble.run(mid) * midGain
+            var outL = topCutL.run(mid + side) * outGain
+            var outR = topCutR.run(mid - side) * outGain
+            // Smooth limiter: drop the gain at once on a peak, bring it back over ~150 ms.
+            let peak = max(abs(outL), abs(outR))
+            let target: Float = peak > 0.89 ? 0.89 / peak : 1
+            if target < gain { gain = target } else { gain += (target - gain) * limiterRelease }
+            outL *= gain
+            outR *= gain
+            samples[f * 2] = min(max(outL, -1), 1)
+            samples[f * 2 + 1] = min(max(outR, -1), 1)
         }
     }
 
@@ -54,29 +64,27 @@ final class ClarityDSP {
         self.level = level
         self.rate = rate
         let strong = level >= 2
-        lowCut = (0..<2).map { _ in .highPass(rate, 80) }
-        exciteIn = (0..<2).map { _ in .highPass(rate, 2500) }
-        exciteOut = (0..<2).map { _ in .highPass(rate, 5000) }
-        exciteOut2 = (0..<2).map { _ in .highPass(rate, 5000) }
-        mud = (0..<2).map { _ in .peak(rate, 300, q: 1, db: strong ? -3 : -2) }
-        presence = (0..<2).map { _ in .peak(rate, 2500, q: 0.9, db: strong ? 6 : 4) }
-        treble = (0..<2).map { _ in .highShelf(rate, 6000, db: strong ? 4.5 : 3) }
-        topCut = (0..<2).map { _ in .lowPass(rate, 16000) }
-        envelope = [0, 0]
-        noiseFloor = [1, 1]
+        lowCutL = .highPass(rate, 80)
+        lowCutR = .highPass(rate, 80)
+        mud = .peak(rate, 300, q: 1, db: strong ? -3 : -2)
+        presence = .peak(rate, 2500, q: 0.9, db: strong ? 6 : 4)
+        exciteIn = .highPass(rate, 2500)
+        exciteOut = .highPass(rate, 5000)
+        exciteOut2 = .highPass(rate, 5000)
+        treble = .highShelf(rate, 6000, db: strong ? 4.5 : 3)
+        topCutL = .lowPass(rate, 16000)
+        topCutR = .lowPass(rate, 16000)
+        envelope = 0
+        noiseFloor = 1
+        gain = 1
         attack = Float(exp(-1 / (0.002 * rate)))
         release = Float(exp(-1 / (0.06 * rate)))
         floorRise = Float(1 / (4 * rate))
+        limiterRelease = Float(1 - exp(-1 / (0.15 * rate)))
         mix = strong ? 0.9 : 0.5
+        midGain = strong ? 1.25 : 1.12
+        sideGain = strong ? 0.85 : 1
         outGain = strong ? 0.8 : 0.85
-    }
-
-    /// Leaves quiet sound alone and rounds off peaks instead of clipping them.
-    static func limit(_ x: Float) -> Float {
-        let a = abs(x)
-        if a <= 0.7 { return x }
-        let shaped = 0.7 + 0.3 * tanh((a - 0.7) / 0.3)
-        return x < 0 ? -shaped : shaped
     }
 }
 
