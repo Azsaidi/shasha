@@ -55,11 +55,6 @@ class ClarityProcessor : BaseAudioProcessor() {
     private var outGain = 1f
     private var gain = 1f
     private var frame = FloatArray(0)
-    private lateinit var hiDetect: Biquad
-    private var hiEnv = 0f
-    private var fullEnv = 0f
-    private var tameAttack = 0f
-    private var tameRelease = 0f
 
     override fun onConfigure(inputAudioFormat: AudioFormat): AudioFormat {
         if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) return AudioFormat.NOT_SET
@@ -88,11 +83,6 @@ class ClarityProcessor : BaseAudioProcessor() {
         release = exp(-1.0 / (0.06 * sr)).toFloat()
         floorRise = (1.0 / (4 * sr)).toFloat()
         limiterRelease = (1 - exp(-1.0 / (0.15 * sr))).toFloat()
-        hiDetect = Biquad.highPass(sr, 3000.0, 0.707)
-        hiEnv = 0f
-        fullEnv = 0f
-        tameAttack = exp(-1.0 / (0.005 * sr)).toFloat()
-        tameRelease = exp(-1.0 / (0.08 * sr)).toFloat()
         exciteMix = if (strong) 0.9f else 0.5f
         midGain = if (strong) 1.25f else 1.12f
         sideGain = if (strong) 0.85f else 1f
@@ -103,10 +93,10 @@ class ClarityProcessor : BaseAudioProcessor() {
 
     /** The dialogue part: mud cut, speech lift, exciter, treble, then turned up. */
     private fun dialogue(input: Float): Float {
-        val base = mud.run(input)
-        val lifted = presence.run(base)
+        var m = mud.run(input)
+        m = presence.run(m)
         // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
-        val upper = exciteIn.run(lifted)
+        val upper = exciteIn.run(m)
         val a = abs(upper)
         val k = if (a > envelope) attack else release
         val env = maxOf(k * envelope + (1 - k) * a, 1e-6f)
@@ -115,16 +105,8 @@ class ClarityProcessor : BaseAudioProcessor() {
         val harmonics = exciteOut2.run(exciteOut.run(upper * upper / env))
         // Only while the sound stands clearly above the background noise (about 10 dB).
         val threshold = maxOf(3 * noiseFloor, 3e-4f)
-        val bright = treble.run(lifted + harmonics * exciteMix * (env * env / (env * env + threshold * threshold)))
-        // Already high-pitched sound (whistles, "s" sounds, strings) gets much less of the lift:
-        // that's what made high notes piercing. Dull dialogue still gets all of it.
-        val hi = abs(hiDetect.run(base))
-        hiEnv = (if (hi > hiEnv) tameAttack else tameRelease) * (hiEnv - hi) + hi
-        val full = abs(base)
-        fullEnv = (if (full > fullEnv) tameAttack else tameRelease) * (fullEnv - full) + full
-        val ratio = hiEnv / maxOf(fullEnv, 1e-6f)
-        val tame = (1.25f / (1 + (ratio / 0.4f) * (ratio / 0.4f))).coerceIn(0.15f, 1f)
-        return (base + (bright - base) * tame) * midGain
+        m += harmonics * exciteMix * (env * env / (env * env + threshold * threshold))
+        return treble.run(m) * midGain
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
