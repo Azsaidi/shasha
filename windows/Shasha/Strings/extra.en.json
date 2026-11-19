@@ -14,5 +14,18 @@
  "episodes": "Episodes",
  "info": "Info",
  "no_favourites_hint_win": "Right-click a channel or poster for options, or click a channel’s star, to add it here.",
- "loading_player": "Starting the player…"
+ "loading_player": "Starting the player…",
+ "clarity_custom": "Sound: custom",
+ "sound_title": "Sound",
+ "sound_normal": "Normal",
+ "sound_clearer": "Clearer",
+ "sound_much": "Much clearer",
+ "sound_dialogue": "Dialogue",
+ "sound_air": "Air (lost top end)",
+ "sound_treble": "Treble",
+ "sound_mud": "Mud cut",
+ "sound_focus": "Dialogue vs music",
+ "sound_tame": "Tame high notes",
+ "sound_reset": "Reset to Clearer",
+ "sound_hint": "Changes apply as you move them and are saved for this series, film or channel."
 }

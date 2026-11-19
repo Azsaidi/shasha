@@ -134,8 +134,9 @@ public sealed class PlayerWindow : Window
         // Top bar
         var close = PlayerButton("\uE72B", L("back"), Close);
         close.RenderTransform = null;
-        _clarityButton = TextButton(L("clarity_0"), CycleClarity);
-        _clarityButton.ToolTip = L("clarity_1");
+        _clarityButton = TextButton(L("clarity_0"), () => { });
+        _clarityButton.Click += (_, _) => ShowSoundPanel(_clarityButton);
+        _clarityButton.ToolTip = L("sound_title");
         var tracks = PlayerButton("\uE7F0", L("tracks"), () => { });
         tracks.Click += (_, _) => ShowTracks(tracks);
         var aspect = PlayerButton("\uE740", L("aspect"), () => { });
@@ -358,7 +359,7 @@ public sealed class PlayerWindow : Window
         {
             if (p == _player) _spinner.Visibility = e.Cache < 100 && !_hadPlayback ? Visibility.Visible : Visibility.Collapsed;
         });
-        if (withClarity) _clarity = new ClarityAudio(p) { Level = 0 };
+        if (withClarity) _clarity = new ClarityAudio(p);
         p.Volume = Store.Settings.Volume;
         return p;
     }
@@ -420,19 +421,19 @@ public sealed class PlayerWindow : Window
         _next.ToolTip = live ? L("next") : L("next_episode");
 
         // "Clearer sound" needs our own sound path; VLC only takes it on a new player.
-        var level = Store.Clarity(ClarityKey(item));
-        Core.Trace.Write($"player: load {item.Kind} {item.StreamId} remote={item.IsRemote} clarity={level} start={_resumeTarget:0}");
+        var sound = Store.Clarity(ClarityKey(item));
+        Core.Trace.Write($"player: load {item.Kind} {item.StreamId} remote={item.IsRemote} clarity={sound?.LabelKey ?? "off"} start={_resumeTarget:0}");
         // A fresh player for each stream when we handle the sound ourselves (VLC switching streams
         // on such a player could crash), and back to VLC's own sound when it's off.
-        if (level > 0 || _clarity != null) SwapPlayer(withClarity: level > 0);
+        if (sound != null || _clarity != null) SwapPlayer(withClarity: sound != null);
         else
         {
             var previous = _player;
             RunInOrder(() => previous.Stop(), "stop");
         }
-        if (_clarity != null) _clarity.Level = level;
+        if (_clarity != null) _clarity.Settings = sound;
         if (!retry) _autoRetries = 0;
-        _clarityButton.Content = L($"clarity_{level}");
+        _clarityButton.Content = L(sound?.LabelKey ?? "clarity_0");
 
         var media = item.IsRemote
             ? new Media(Vlc, new Uri(item.Url))
@@ -789,23 +790,128 @@ public sealed class PlayerWindow : Window
         _mute.ToolTip = _player.Mute ? L("unmute") : L("mute");
     }
 
-    void CycleClarity()
+    /// <summary>
+    /// Turns Clearer sound on, off or to new slider values. Slider moves apply straight away;
+    /// switching between VLC's own sound and ours continues from the same spot.
+    /// </summary>
+    void SetClarity(ClaritySettings? settings)
     {
         var item = Current;
         if (item == null) return;
-        var level = (Store.Clarity(ClarityKey(item)) + 1) % 3;
-        Store.SetClarity(ClarityKey(item), level);
-        _clarityButton.Content = L($"clarity_{level}");
-        Toast.Show(L($"clarity_{level}"));
-        if (_clarity != null && level > 0)
+        Store.SetClarity(ClarityKey(item), settings);
+        _clarityButton.Content = L(settings?.LabelKey ?? "clarity_0");
+        if (_clarity != null && settings != null)
         {
-            _clarity.Level = level;
+            _clarity.Settings = settings;
             return;
         }
-        // Switching between VLC's own sound and ours: continue from the same spot.
+        if (_clarity == null && settings == null) return;
         var at = item.IsLive ? 0 : _player.Time / 1000.0;
         SaveCurrent();
         Load(_index, at);
+    }
+
+    /// <summary>The Sound panel: presets and sliders, applied as they move, saved for this title.</summary>
+    void ShowSoundPanel(Button anchor)
+    {
+        var item = Current;
+        if (item == null) return;
+        var current = Store.Clarity(ClarityKey(item));
+        var panel = new StackPanel { Width = 360, Margin = new Thickness(18) };
+        var refreshers = new List<Action>();
+        void Refresh() { foreach (var r in refreshers) r(); }
+
+        panel.Children.Add(new TextBlock { Text = L("sound_title"), FontSize = 17, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White });
+        var presets = new WrapPanel { Margin = new Thickness(0, 12, 0, 4) };
+        foreach (var (label, preset) in new (string, ClaritySettings?)[]
+                 { (L("sound_normal"), null), (L("sound_clearer"), ClaritySettings.Clearer), (L("sound_much"), ClaritySettings.MuchClearer) })
+        {
+            var b = TextButton(label, () => { });
+            b.Click += (_, _) =>
+            {
+                // Slow switches (on/off) reload the player; keep the panel open either way.
+                current = preset;
+                SetClarity(preset);
+                Refresh();
+            };
+            refreshers.Add(() =>
+            {
+                var on = Equals(preset, current);
+                b.Background = on ? Kit.Brush("Accent") : new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
+                b.Foreground = on ? Kit.Brush("Bg") : Brushes.White;
+            });
+            b.Margin = new Thickness(0, 0, 8, 6);
+            presets.Children.Add(b);
+        }
+        panel.Children.Add(presets);
+        panel.Children.Add(new TextBlock
+        {
+            Text = L("sound_hint"), FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = Kit.Brush("Subtle"),
+            Margin = new Thickness(0, 2, 0, 6),
+        });
+
+        void AddSlider(string title, double max, string? unit, Func<ClaritySettings, float> get, Func<ClaritySettings, float, ClaritySettings> set)
+        {
+            var label = new TextBlock { Foreground = Brushes.White, FontSize = 13, Margin = new Thickness(0, 10, 0, 2) };
+            var slider = new Slider { Minimum = 0, Maximum = max, SmallChange = max / 50, LargeChange = max / 10, IsMoveToPointEnabled = true };
+            var updating = false;
+            refreshers.Add(() =>
+            {
+                var s = current ?? ClaritySettings.Clearer;
+                var v = get(s);
+                label.Text = $"{title}   " + (unit != null ? $"{v:0.0} {unit}" : $"{v / max * 100:0}%");
+                updating = true;
+                slider.Value = v;
+                updating = false;
+                slider.IsEnabled = current != null;
+                label.Opacity = current != null ? 1 : 0.45;
+            });
+            slider.ValueChanged += (_, e) =>
+            {
+                if (updating || current == null) return;
+                current = set(current, (float)(Math.Round(e.NewValue * 10) / 10));
+                SetClarity(current);
+                Refresh();
+            };
+            panel.Children.Add(label);
+            panel.Children.Add(slider);
+        }
+        AddSlider(L("sound_dialogue"), 10, "dB", s => s.Dialogue, (s, v) => s with { Dialogue = v });
+        AddSlider(L("sound_air"), 1.5, null, s => s.Air, (s, v) => s with { Air = v });
+        AddSlider(L("sound_treble"), 8, "dB", s => s.Treble, (s, v) => s with { Treble = v });
+        AddSlider(L("sound_mud"), 6, "dB", s => s.Mud, (s, v) => s with { Mud = v });
+        AddSlider(L("sound_focus"), 1, null, s => s.Focus, (s, v) => s with { Focus = v });
+        AddSlider(L("sound_tame"), 1, null, s => s.Tame, (s, v) => s with { Tame = v });
+
+        var reset = TextButton(L("sound_reset"), () => { });
+        reset.Margin = new Thickness(0, 16, 0, 0);
+        reset.HorizontalAlignment = HorizontalAlignment.Left;
+        reset.Click += (_, _) =>
+        {
+            current = ClaritySettings.Clearer;
+            SetClarity(current);
+            Refresh();
+        };
+        panel.Children.Add(reset);
+        Refresh();
+
+        var popup = new System.Windows.Controls.Primitives.Popup
+        {
+            Child = new Border
+            {
+                Child = panel, Background = new SolidColorBrush(Color.FromArgb(0xF2, 0x15, 0x22, 0x36)),
+                CornerRadius = new CornerRadius(14), BorderBrush = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF)),
+                BorderThickness = new Thickness(1),
+            },
+            PlacementTarget = anchor,
+            Placement = PlacementMode.Bottom,
+            StaysOpen = false,
+            AllowsTransparency = true,
+            FlowDirection = L10n.Direction,
+        };
+        popup.Closed += (_, _) => ScheduleHide();
+        ShowControls(autoHide: false);
+        popup.IsOpen = true;
     }
 
     void ShowTracks(Button anchor)

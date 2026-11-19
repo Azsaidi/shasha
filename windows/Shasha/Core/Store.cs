@@ -15,6 +15,8 @@ public sealed class Settings
     public Dictionary<string, string> Sorts { get; set; } = new();
     /// <summary>"Clearer sound" level per series/film/channel.</summary>
     public Dictionary<string, int> Clarity { get; set; } = new();
+    /// <summary>The Sound sliders per series/film/channel; null means off.</summary>
+    public Dictionary<string, Shasha.Player.ClaritySettings?> ClaritySettings { get; set; } = new();
     public List<string> Searches { get; set; } = new();
     public string? DownloadsFolder { get; set; }
     public int Volume { get; set; } = 100;
@@ -145,11 +147,22 @@ public static class Store
         SaveSettings();
     }
 
-    public static int Clarity(string key) => Settings.Clarity.TryGetValue(key, out var v) ? v : 0;
-
-    public static void SetClarity(string key, int level)
+    /// <summary>Clearer sound for a series / film / channel (null = off). Older 1/2 levels become the presets.</summary>
+    public static Shasha.Player.ClaritySettings? Clarity(string key)
     {
-        if (level == 0) Settings.Clarity.Remove(key); else Settings.Clarity[key] = level;
+        if (Settings.ClaritySettings.TryGetValue(key, out var s)) return s;
+        return (Settings.Clarity.TryGetValue(key, out var v) ? v : 0) switch
+        {
+            1 => Shasha.Player.ClaritySettings.Clearer,
+            2 => Shasha.Player.ClaritySettings.MuchClearer,
+            _ => null,
+        };
+    }
+
+    public static void SetClarity(string key, Shasha.Player.ClaritySettings? settings)
+    {
+        Settings.ClaritySettings[key] = settings;
+        Settings.Clarity.Remove(key);
         SaveSettings();
     }
 }

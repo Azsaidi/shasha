@@ -5,6 +5,32 @@ using NAudio.Wave;
 namespace Shasha.Player;
 
 /// <summary>
+/// The "Clearer sound" sliders. Clearer and Much clearer are the tuned presets (the same as the
+/// phone apps); any change makes a custom setting, saved per series, film or channel.
+/// </summary>
+public sealed record ClaritySettings(float Dialogue, float Air, float Treble, float Mud, float Focus, float Tame)
+{
+    public static readonly ClaritySettings Clearer = new(4, 0.5f, 3, 2, 0.25f, 0);
+    public static readonly ClaritySettings MuchClearer = new(6, 0.9f, 4.5f, 3, 0.5f, 0);
+
+    // Gains along the "Dialogue vs music" slider; 0.25 and 0.5 are exactly the presets' values.
+    [System.Text.Json.Serialization.JsonIgnore] public float MidGain => Along(Focus, 1, 1.12f, 1.25f, 1.5f);
+    [System.Text.Json.Serialization.JsonIgnore] public float SideGain => Along(Focus, 1, 1, 0.85f, 0.6f);
+    [System.Text.Json.Serialization.JsonIgnore] public float OutGain => Along(Focus, 0.9f, 0.85f, 0.8f, 0.7f);
+
+    /// <summary>"clarity_1" / "clarity_2" for the presets, "clarity_custom" otherwise.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public string LabelKey => Equals(Clearer) ? "clarity_1" : Equals(MuchClearer) ? "clarity_2" : "clarity_custom";
+
+    static float Along(float f, float v0, float v1, float v2, float v3)
+    {
+        var x = Math.Clamp(f, 0, 1);
+        if (x <= 0.25f) return v0 + (v1 - v0) * x / 0.25f;
+        if (x <= 0.5f) return v1 + (v2 - v1) * (x - 0.25f) / 0.25f;
+        return v2 + (v3 - v2) * (x - 0.5f) / 0.5f;
+    }
+}
+
+/// <summary>
 /// "Clearer sound" for dull, muffled soundtracks. Same processing as the phone apps.
 ///
 /// Dialogue sits in the middle of a stereo mix; music and effects are spread to the sides. So the
@@ -13,36 +39,37 @@ namespace Shasha.Player;
 /// "air" a bad encode cut off (only above the background noise, so hiss isn't turned into "rain"),
 /// and a little treble. The middle is then turned up against the sides; music on the sides is left
 /// alone. A smooth limiter (gain riding, not clipping) keeps peaks in check without buzzing.
-/// Level 0 leaves the sound untouched.
+/// No settings: the sound is left untouched.
 /// </summary>
 public sealed class ClarityDsp
 {
-    int _level = -1;
+    ClaritySettings? _tuned;
     double _rate;
     Biquad _lowCutL = Biquad.HighPass(48000, 80), _lowCutR = Biquad.HighPass(48000, 80), _mud = Biquad.HighPass(48000, 80),
            _presence = Biquad.HighPass(48000, 80), _treble = Biquad.HighPass(48000, 80), _exciteIn = Biquad.HighPass(48000, 80),
            _exciteOut = Biquad.HighPass(48000, 80), _exciteOut2 = Biquad.HighPass(48000, 80),
-           _topCutL = Biquad.HighPass(48000, 80), _topCutR = Biquad.HighPass(48000, 80);
+           _topCutL = Biquad.HighPass(48000, 80), _topCutR = Biquad.HighPass(48000, 80), _hiDetect = Biquad.HighPass(48000, 3000);
     float _envelope, _noiseFloor = 1, _attack, _release, _floorRise, _limiterRelease;
-    float _mix, _midGain = 1, _sideGain = 1, _outGain = 1, _gain = 1;
+    float _hiEnv, _fullEnv, _tameAttack, _tameRelease, _gain = 1;
 
-    public void Reset() => _level = -1;
+    public void Reset() => _rate = 0;
 
-    /// <summary>Processes interleaved stereo samples in place.</summary>
-    public void Process(Span<float> samples, int level, double rate)
+    /// <summary>Processes interleaved stereo samples in place. No settings: untouched.</summary>
+    public void Process(Span<float> samples, ClaritySettings? settings, double rate)
     {
-        if (level <= 0) return;
-        if (level != _level || rate != _rate) Build(level, rate);
+        if (settings is not { } s) return;
+        if (rate != _rate) Build(rate);
+        if (!s.Equals(_tuned)) Tune(s);
+        float mix = s.Air, midGain = s.MidGain, sideGain = s.SideGain, outGain = s.OutGain, tame = s.Tame;
         for (var i = 0; i + 1 < samples.Length; i += 2)
         {
             var l = _lowCutL.Run(samples[i]);
             var r = _lowCutR.Run(samples[i + 1]);
-            var mid = (l + r) * 0.5f;
-            var side = (l - r) * 0.5f * _sideGain;
-            mid = _mud.Run(mid);
-            mid = _presence.Run(mid);
+            var side = (l - r) * 0.5f * sideGain;
+            var baseMid = _mud.Run((l + r) * 0.5f);
+            var lifted = _presence.Run(baseMid);
             // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
-            var upper = _exciteIn.Run(mid);
+            var upper = _exciteIn.Run(lifted);
             var a = MathF.Abs(upper);
             var k = a > _envelope ? _attack : _release;
             var env = MathF.Max(k * _envelope + (1 - k) * a, 1e-6f);
@@ -51,10 +78,22 @@ public sealed class ClarityDsp
             var harmonics = _exciteOut2.Run(_exciteOut.Run(upper * upper / env));
             // Only while the sound stands clearly above the background noise (about 10 dB).
             var threshold = MathF.Max(3 * _noiseFloor, 3e-4f);
-            mid += harmonics * _mix * (env * env / (env * env + threshold * threshold));
-            mid = _treble.Run(mid) * _midGain;
-            var outL = _topCutL.Run(mid + side) * _outGain;
-            var outR = _topCutR.Run(mid - side) * _outGain;
+            var bright = _treble.Run(lifted + harmonics * mix * (env * env / (env * env + threshold * threshold)));
+            var amount = 1f;
+            if (tame > 0)
+            {
+                // Already high-pitched sound (whistles, "s" sounds, strings) gets less of the lift.
+                var hi = MathF.Abs(_hiDetect.Run(baseMid));
+                _hiEnv = (hi > _hiEnv ? _tameAttack : _tameRelease) * (_hiEnv - hi) + hi;
+                var full = MathF.Abs(baseMid);
+                _fullEnv = (full > _fullEnv ? _tameAttack : _tameRelease) * (_fullEnv - full) + full;
+                var ratio = _hiEnv / MathF.Max(_fullEnv, 1e-6f);
+                var tamed = Math.Clamp(1.25f / (1 + (ratio / 0.4f) * (ratio / 0.4f)), 0.15f, 1f);
+                amount = 1 - tame * (1 - tamed);
+            }
+            var mid = (baseMid + (bright - baseMid) * amount) * midGain;
+            var outL = _topCutL.Run(mid + side) * outGain;
+            var outR = _topCutR.Run(mid - side) * outGain;
             // Smooth limiter: drop the gain at once on a peak, bring it back over ~150 ms.
             var peak = MathF.Max(MathF.Abs(outL), MathF.Abs(outR));
             var target = peak > 0.89f ? 0.89f / peak : 1f;
@@ -64,39 +103,55 @@ public sealed class ClarityDsp
         }
     }
 
-    void Build(int level, double rate)
+    /// <summary>New sample rate: every filter from scratch.</summary>
+    void Build(double rate)
     {
-        _level = level;
         _rate = rate;
-        var strong = level >= 2;
+        _tuned = null;
         _lowCutL = Biquad.HighPass(rate, 80);
         _lowCutR = Biquad.HighPass(rate, 80);
-        _mud = Biquad.Peak(rate, 300, 1, strong ? -3 : -2);
-        _presence = Biquad.Peak(rate, 2500, 0.9, strong ? 6 : 4);
+        _mud = Biquad.Peak(rate, 300, 1, 0);
+        _presence = Biquad.Peak(rate, 2500, 0.9, 0);
+        _treble = Biquad.HighShelf(rate, 6000, 0);
         _exciteIn = Biquad.HighPass(rate, 2500);
         _exciteOut = Biquad.HighPass(rate, 5000);
         _exciteOut2 = Biquad.HighPass(rate, 5000);
-        _treble = Biquad.HighShelf(rate, 6000, strong ? 4.5 : 3);
         _topCutL = Biquad.LowPass(rate, 16000);
         _topCutR = Biquad.LowPass(rate, 16000);
+        _hiDetect = Biquad.HighPass(rate, 3000);
         _envelope = 0;
         _noiseFloor = 1;
+        _hiEnv = 0;
+        _fullEnv = 0;
         _gain = 1;
         _attack = (float)Math.Exp(-1 / (0.002 * rate));
         _release = (float)Math.Exp(-1 / (0.06 * rate));
         _floorRise = (float)(1 / (4 * rate));
         _limiterRelease = (float)(1 - Math.Exp(-1 / (0.15 * rate)));
-        _mix = strong ? 0.9f : 0.5f;
-        _midGain = strong ? 1.25f : 1.12f;
-        _sideGain = strong ? 0.85f : 1f;
-        _outGain = strong ? 0.8f : 0.85f;
+        _tameAttack = (float)Math.Exp(-1 / (0.005 * rate));
+        _tameRelease = (float)Math.Exp(-1 / (0.08 * rate));
+    }
+
+    /// <summary>New slider values: retune the filters but keep their memory, so moving a slider doesn't click.</summary>
+    void Tune(ClaritySettings s)
+    {
+        _tuned = s;
+        _mud.Retune(Biquad.Peak(_rate, 300, 1, -s.Mud));
+        _presence.Retune(Biquad.Peak(_rate, 2500, 0.9, s.Dialogue));
+        _treble.Retune(Biquad.HighShelf(_rate, 6000, s.Treble));
     }
 
     /// <summary>One second-order filter (RBJ audio cookbook), with its own memory.</summary>
     sealed class Biquad
     {
-        readonly float _b0, _b1, _b2, _a1, _a2;
+        float _b0, _b1, _b2, _a1, _a2;
         float _z1, _z2;
+
+        /// <summary>Takes another filter's settings, keeping this one's memory.</summary>
+        public void Retune(Biquad o)
+        {
+            _b0 = o._b0; _b1 = o._b1; _b2 = o._b2; _a1 = o._a1; _a2 = o._a2;
+        }
 
         Biquad(double b0, double b1, double b2, double a0, double a1, double a2)
         {
@@ -216,8 +271,8 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
 
     public WaveFormat WaveFormat { get; } = WaveFormat.CreateIeeeFloatWaveFormat(Rate, 2);
 
-    /// <summary>0 = untouched, 1 = clearer, 2 = much clearer.</summary>
-    public volatile int Level;
+    /// <summary>The sliders (null = untouched). Can change at any time.</summary>
+    public volatile ClaritySettings? Settings;
 
     public ClarityAudio(MediaPlayer player)
     {
@@ -299,9 +354,9 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
         var copy = new float[raw.Length];
         for (var i = 0; i < raw.Length; i++) copy[i] = raw[i] / 32768f;
         var before = Peak(copy);
-        _dsp.Process(copy, Level, Rate);
+        _dsp.Process(copy, Settings, Rate);
         if (_traced <= 3 || (_pieces++ % 500 == 0 && _pieces < 5000))
-            Core.Trace.Write($"clarity: level in {before:0.000} out {Peak(copy):0.000} (setting {Level})");
+            Core.Trace.Write($"clarity: level in {before:0.000} out {Peak(copy):0.000} (setting {Settings?.Dialogue})");
         lock (_lock)
         {
             var chunk = new Chunk { Pts = pts, Samples = copy };
