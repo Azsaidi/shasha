@@ -396,7 +396,7 @@ public sealed class PlayerWindow : Window
         else
         {
             var previous = _player;
-            Background(() => previous.Stop());
+            RunInOrder(() => previous.Stop());
         }
         if (_clarity != null) _clarity.Level = level;
         if (!retry) _autoRetries = 0;
@@ -408,7 +408,7 @@ public sealed class PlayerWindow : Window
         media.AddOption($":http-user-agent={Http.UserAgent}");
         media.AddOption(":network-caching=1500");
         var player = _player;
-        WhenVideoReady(_view, player, () => Background(() =>
+        WhenVideoReady(_view, player, () => RunInOrder(() =>
         {
             player.Play(media);
             media.Dispose();
@@ -457,7 +457,7 @@ public sealed class PlayerWindow : Window
         _clarity = null;
         _player = NewPlayer(withClarity);
         _view.MediaPlayer = _player;
-        Background(() =>
+        RunInOrder(() =>
         {
             try { old.Stop(); } catch { }
             old.Dispose();
@@ -471,7 +471,7 @@ public sealed class PlayerWindow : Window
     /// VLC work off the UI thread, one step after another: the old stream is always fully closed
     /// before the next opens (plans with one connection refuse a second one).
     /// </summary>
-    public static void Background(Action action)
+    public static void RunInOrder(Action action)
     {
         _work = _work.ContinueWith(_ =>
         {
@@ -988,7 +988,7 @@ public sealed class PlayerWindow : Window
         var clarity = _clarity;
         _view.MediaPlayer = null;
         // Stopping VLC can take a moment on a stalled stream: don't hold up the window.
-        Background(() =>
+        RunInOrder(() =>
         {
             try { player.Stop(); } catch { }
             player.Dispose();
