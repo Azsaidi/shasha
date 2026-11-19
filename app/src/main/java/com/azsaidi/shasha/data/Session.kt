@@ -327,9 +327,55 @@ object Session {
         history.any { it.kind == WatchKind.EPISODE && it.seriesId == seriesId }
 
     /** Marks something as finished (keeps it out of Continue watching, shows a tick). */
-    fun markWatched(entry: WatchEntry) {
+    /** Marks something as finished. For an episode, the next one goes into Continue watching as "Up next". */
+    fun markWatched(entry: WatchEntry, context: android.content.Context? = null) {
         val acc = account ?: return
         record(acc.id, entry.copy(position = 0, finished = true, upNext = false, updatedAt = System.currentTimeMillis()))
+        if (entry.kind == WatchKind.EPISODE && context != null) queueNextEpisode(context.applicationContext, acc.id, entry)
+    }
+
+    /** Finds the episode after [entry] (into the next season if needed) and lists it as up next. */
+    private fun queueNextEpisode(context: android.content.Context, accountId: String, entry: WatchEntry) {
+        val seriesId = entry.seriesId ?: return
+        val client = api ?: return
+        scope.launch {
+            val info = runCatching { client.seriesInfo(seriesId) }.getOrNull() ?: return@launch
+            val seasons = info.seasons.keys.sorted().filter { info.seasons[it].orEmpty().isNotEmpty() }
+            var next: Episode? = null
+            for ((si, season) in seasons.withIndex()) {
+                val episodes = info.seasons[season].orEmpty()
+                val i = episodes.indexOfFirst { it.id == entry.streamId }
+                if (i < 0) continue
+                next = episodes.getOrNull(i + 1) ?: seasons.getOrNull(si + 1)?.let { info.seasons[it]?.firstOrNull() }
+                break
+            }
+            val ep = next ?: return@launch
+            if (account?.id != accountId) return@launch
+            val now = System.currentTimeMillis() + 1
+            val existing = historyEntry(WatchKind.EPISODE, ep.id)
+            if (existing != null && !existing.finished && existing.position > 10_000) {
+                // Already part-watched: just bring it to the front.
+                record(accountId, existing.copy(updatedAt = now))
+                return@launch
+            }
+            val seriesName = entry.seriesName ?: info.name ?: entry.title
+            val code = context.getString(com.azsaidi.shasha.R.string.episode_code, ep.season, ep.number)
+            record(
+                accountId,
+                WatchEntry(
+                    kind = WatchKind.EPISODE,
+                    streamId = ep.id,
+                    title = seriesName,
+                    subtitle = listOfNotNull(code, tidyEpisodeTitle(ep.title, seriesName)).joinToString(" · "),
+                    image = ep.image ?: info.cover ?: entry.image,
+                    extension = ep.extension,
+                    seriesId = seriesId,
+                    seriesName = seriesName,
+                    upNext = true,
+                    updatedAt = now,
+                ),
+            )
+        }
     }
 
     fun clearHistory() {

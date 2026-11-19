@@ -332,7 +332,8 @@ final class Session: ObservableObject {
         history.contains { $0.kind == .episode && $0.seriesId == seriesId }
     }
 
-    /// Marks something as finished (keeps it out of Continue watching, shows a tick).
+    /// Marks something as finished (shows a tick). For an episode, the next one goes into
+    /// Continue watching as "Up next".
     func markWatched(_ entry: WatchEntry) {
         guard let acc = account else { return }
         var e = entry
@@ -341,6 +342,44 @@ final class Session: ObservableObject {
         e.upNext = false
         e.updatedAt = Date()
         record(e, accountId: acc.id)
+        if entry.kind == .episode { queueNextEpisode(after: entry, accountId: acc.id) }
+    }
+
+    /// Finds the episode after `entry` (into the next season if needed) and lists it as up next.
+    private func queueNextEpisode(after entry: WatchEntry, accountId: String) {
+        guard let seriesId = entry.seriesId, let client = api else { return }
+        Task {
+            guard let info = try? await client.seriesInfo(seriesId), self.account?.id == accountId else { return }
+            let seasons = info.seasonNumbers.filter { !(info.seasons[$0] ?? []).isEmpty }
+            var next: Episode?
+            for (si, season) in seasons.enumerated() {
+                let episodes = info.seasons[season] ?? []
+                guard let i = episodes.firstIndex(where: { $0.id == entry.streamId }) else { continue }
+                if i + 1 < episodes.count {
+                    next = episodes[i + 1]
+                } else if si + 1 < seasons.count {
+                    next = info.seasons[seasons[si + 1]]?.first
+                }
+                break
+            }
+            guard let ep = next else { return }
+            let now = Date().addingTimeInterval(1)
+            if var existing = self.historyEntry(.episode, ep.id), !existing.finished, existing.position > 10 {
+                // Already part-watched: just bring it to the front.
+                existing.updatedAt = now
+                self.record(existing, accountId: accountId)
+                return
+            }
+            let seriesName = entry.seriesName ?? info.name ?? entry.title
+            let subtitle = [L("episode_code", ep.season, ep.number), tidyEpisodeTitle(ep.title, seriesName: seriesName)]
+                .compactMap { $0 }.joined(separator: " · ")
+            self.record(WatchEntry(
+                kind: .episode, streamId: ep.id, title: seriesName, subtitle: subtitle,
+                image: ep.image ?? info.cover ?? entry.image, ext: ep.ext,
+                seriesId: seriesId, seriesName: seriesName,
+                position: 0, duration: 0, finished: false, upNext: true, updatedAt: now
+            ), accountId: accountId)
+        }
     }
 
     func markUnwatched(_ entry: WatchEntry) {

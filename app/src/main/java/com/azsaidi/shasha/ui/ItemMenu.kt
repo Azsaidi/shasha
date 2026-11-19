@@ -250,7 +250,7 @@ private fun watchedAction(context: Context, entry: WatchEntry): MenuAction {
     return if (watched) {
         MenuAction(context.getString(R.string.mark_unwatched), Icons.Filled.RemoveDone) { Session.removeHistoryKey(entry.key) }
     } else {
-        MenuAction(context.getString(R.string.mark_watched), Icons.Filled.CheckCircle) { Session.markWatched(entry) }
+        MenuAction(context.getString(R.string.mark_watched), Icons.Filled.CheckCircle) { Session.markWatched(entry, context) }
     }
 }
 
@@ -282,13 +282,13 @@ fun showHistoryMenu(context: Context, entry: WatchEntry, onOpen: (() -> Unit)? =
         }
         WatchKind.MOVIE -> {
             actions.add(favouriteAction(context, StreamItem(entry.streamId, entry.title, entry.image, null, ContentType.MOVIE, entry.extension, null)))
-            actions.add(MenuAction(context.getString(R.string.mark_watched), Icons.Filled.CheckCircle) { Session.markWatched(entry) })
+            actions.add(MenuAction(context.getString(R.string.mark_watched), Icons.Filled.CheckCircle) { Session.markWatched(entry, context) })
             actions.add(MenuAction(context.getString(R.string.remove_from_continue), Icons.Filled.HistoryToggleOff) {
                 Session.removeHistoryKey(entry.key)
             })
         }
         WatchKind.EPISODE -> {
-            actions.add(MenuAction(context.getString(R.string.mark_watched), Icons.Filled.CheckCircle) { Session.markWatched(entry) })
+            actions.add(MenuAction(context.getString(R.string.mark_watched), Icons.Filled.CheckCircle) { Session.markWatched(entry, context) })
             actions.add(MenuAction(context.getString(R.string.remove_from_continue), Icons.Filled.HistoryToggleOff) {
                 Session.removeFromHistory(entry)
             })
