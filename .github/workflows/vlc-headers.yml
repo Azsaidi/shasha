@@ -1,0 +1,16 @@
+name: VLCKit 4 headers (temporary)
+on: workflow_dispatch
+jobs:
+  dump:
+    runs-on: macos-15
+    steps:
+      - name: Print VLCAudioEqualizer header
+        run: |
+          mkdir probe && cd probe
+          printf "platform :ios, '16.0'\nuse_frameworks!\ntarget 'Probe' do\n  pod 'VLCKit', '4.0.0a18'\nend\n" > Podfile
+          mkdir Probe && echo 'import Foundation' > Probe/main.swift
+          printf 'name: Probe\noptions: { deploymentTarget: { iOS: "16.0" } }\ntargets:\n  Probe:\n    type: application\n    platform: iOS\n    sources: [Probe]\n' > project.yml
+          brew install xcodegen >/dev/null && xcodegen generate >/dev/null
+          pod install >/dev/null || pod install --repo-update >/dev/null
+          H=$(find Pods/VLCKit -path "*ios-arm64/*" -name "Headers" -type d | head -1)
+          echo "==== VLCAudioEqualizer.h ===="; grep -v '^\s*\*' "$H/VLCAudioEqualizer.h" | grep -v '^\s*/\*\*' | grep -v '^\s*//' | grep -v '^\s*$'
