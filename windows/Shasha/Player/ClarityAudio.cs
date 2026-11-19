@@ -153,9 +153,11 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     delegate long ClockFn();
     static ClockFn? _clockFn;
-    static readonly System.Diagnostics.Stopwatch Fallback = System.Diagnostics.Stopwatch.StartNew();
 
-    /// <summary>LibVLC's clock (µs), which VLC dates the sound with. Found in the libvlc.dll VLC already loaded.</summary>
+    /// <summary>
+    /// LibVLC's clock (µs), which VLC dates the sound with. Taken from the libvlc.dll VLC already
+    /// loaded; if that fails, the Windows performance counter, which is what VLC's clock reads.
+    /// </summary>
     static long libvlc_clock()
     {
         if (_clockFn == null)
@@ -165,14 +167,26 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
                 var path = System.IO.Path.Combine(AppContext.BaseDirectory, "libvlc", "win-x64", "libvlc.dll");
                 var lib = NativeLibrary.Load(System.IO.File.Exists(path) ? path : "libvlc.dll");
                 _clockFn = Marshal.GetDelegateForFunctionPointer<ClockFn>(NativeLibrary.GetExport(lib, "libvlc_clock"));
+                Core.Trace.Write($"clarity: clock from libvlc ({_clockFn()} vs counter {CounterClock()})");
             }
-            catch
+            catch (Exception e)
             {
-                _clockFn = () => Fallback.ElapsedTicks * 1_000_000 / System.Diagnostics.Stopwatch.Frequency;
+                _clockFn = CounterClock;
+                Core.Trace.Write("clarity: clock from counter, libvlc_clock unavailable: " + e.Message);
             }
         }
         return _clockFn();
     }
+
+    static long CounterClock() =>
+        (long)(System.Diagnostics.Stopwatch.GetTimestamp() * (1_000_000.0 / System.Diagnostics.Stopwatch.Frequency));
+
+    /// <summary>
+    /// True when VLC's timestamps don't match the clock at all: then the sound simply plays in the
+    /// order it arrives, with a small buffer, instead of waiting for times that never come.
+    /// </summary>
+    bool _freeRun;
+    int _traced;
 
     sealed class Chunk
     {
@@ -220,6 +234,8 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
         _latency = latencyMs * 1000L;
         _out.Init(this);
         _out.Play();
+        _out.PlaybackStopped += (_, e) => Core.Trace.Write("clarity: sound device stopped " + e.Exception?.Message);
+        Core.Trace.Write($"clarity: sound device ready ({_out.OutputWaveFormat})");
     }
 
     public void Dispose()
@@ -236,6 +252,17 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
 
     void Receive(IntPtr samples, uint count, long pts)
     {
+        var clock = libvlc_clock();
+        if (_traced < 8)
+        {
+            _traced++;
+            Core.Trace.Write($"clarity: piece {count} frames, pts {pts}, clock {clock}, early by {(pts - clock) / 1000} ms");
+        }
+        if (_traced == 1 && Math.Abs(pts - clock) > 10_000_000)
+        {
+            _freeRun = true;
+            Core.Trace.Write("clarity: timestamps don't match the clock, playing in arrival order");
+        }
         var copy = new float[count * 2];
         Marshal.Copy(samples, copy, 0, copy.Length);
         _dsp.Process(copy, Level, Rate);
@@ -243,7 +270,7 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
         {
             var chunk = new Chunk { Pts = pts, Samples = copy };
             // A piece that arrives while paused was dated before the pause: keep it in line.
-            if (_pausedAt is long paused) chunk.Pts += libvlc_clock() - paused;
+            if (_pausedAt is long paused) chunk.Pts += clock - paused;
             _chunks.Add(chunk);
             if (_chunks.Count > 400) _chunks.RemoveRange(0, _chunks.Count - 400);
         }
@@ -271,6 +298,7 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
 
     bool _started;
     double _drift;
+    int _starts;
 
     /// <summary>
     /// Audio thread: fills the buffer with what's due now. Plays pieces back to back while in sync,
@@ -290,6 +318,13 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
                 if (_pausedAt != null || _chunks.Count == 0) { _started = false; return Silence(); }
                 var head = _chunks[0];
                 var lead = (double)(head.Pts + (long)(head.Read * 1_000_000.0 / Rate) - now);
+                if (_freeRun)
+                {
+                    // Start once ~100 ms is waiting, then just play in order.
+                    var buffered = 0;
+                    foreach (var ch in _chunks) buffered += ch.Frames - ch.Read;
+                    lead = _started ? 0 : (buffered >= Rate / 10 ? 0 : 1e9);
+                }
                 var fadeIn = 0;
                 var fadeOut = false;
                 if (!_started)
@@ -309,11 +344,17 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
                     _started = true;
                     _drift = 0;
                     fadeIn = fadeFrames;
+                    if (_starts++ < 10) Core.Trace.Write($"clarity: start, {lead / 1000:0} ms from due, {_chunks.Count} pieces waiting");
                 }
                 else
                 {
                     _drift = _drift * 0.95 + lead * 0.05;
-                    if (Math.Abs(_drift) > 80_000) { fadeOut = true; _started = false; }
+                    if (Math.Abs(_drift) > 80_000)
+                    {
+                        fadeOut = true;
+                        _started = false;
+                        if (_starts < 10) Core.Trace.Write($"clarity: re-align, {_drift / 1000:0} ms out");
+                    }
                 }
                 var gain = _muted ? 0 : _volume;
                 var first = written;
@@ -352,9 +393,10 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
                 }
             }
         }
-        catch
+        catch (Exception e)
         {
             // Never let the sound device stop: play silence for this pass instead.
+            if (_starts < 10) { _starts++; Core.Trace.Write("clarity: read failed " + e.Message); }
         }
         if (written < frames) Array.Clear(buffer, offset + written * 2, (frames - written) * 2);
         return count;

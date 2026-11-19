@@ -17,6 +17,8 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Log(e.ExceptionObject?.ToString() ?? "unknown");
         TaskScheduler.UnobservedTaskException += (_, e) => { Log(e.Exception.ToString()); e.SetObserved(); };
         Store.Load();
+        Core.Trace.Start();
+        Core.Trace.Write($"Shasha {Updater.CurrentVersion} on {Environment.OSVersion}");
         L10n.Load(Store.Settings.Language);
         FrameworkElement.LanguageProperty.OverrideMetadata(typeof(FrameworkElement),
             new FrameworkPropertyMetadata(System.Windows.Markup.XmlLanguage.GetLanguage(L10n.Culture.IetfLanguageTag)));
@@ -45,6 +47,7 @@ public partial class App : Application
 
     public static void Log(string text)
     {
+        Core.Trace.Write("ERROR " + text);
         try
         {
             System.IO.Directory.CreateDirectory(Store.Root);

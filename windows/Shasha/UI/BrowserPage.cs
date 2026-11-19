@@ -139,6 +139,7 @@ public sealed class BrowserPage : Page
     async void Load()
     {
         var noun = L(_type.NounKey());
+        Core.Trace.Write($"browser {_type}: load");
         _libraryVersion = Session.CacheVersion;
         if (Session.Cached(_type) == null)
         {
@@ -151,6 +152,7 @@ public sealed class BrowserPage : Page
             var hide = Session.HideAdult;
             _library = await Task.Run(() => Session.FilterAdult(lib, hide));
             _overlay.Content = null;
+            Core.Trace.Write($"browser {_type}: {_library.Items.Count} items, {_library.Categories.Count} categories");
             if (_library.Items.Count == 0)
             {
                 _overlay.Content = Kit.Message("\uE7BA", L("no_x_on_account", noun));
@@ -162,6 +164,7 @@ public sealed class BrowserPage : Page
         }
         catch (Exception e)
         {
+            Core.Trace.Write($"browser {_type}: failed {e}");
             _overlay.Content = Kit.Message("\uE7BA", L("couldnt_load_x", noun), Http.Friendly(e), L("try_again"), Load);
         }
     }
@@ -233,6 +236,7 @@ public sealed class BrowserPage : Page
             : lib.Categories.FirstOrDefault(c => c.Id == category)?.Name ?? "";
         _count.Text = items.Count.ToString("N0", L10n.Culture) + " " + L(_type.NounKey());
         _cards = items.Select((s, i) => ItemActions.Card(s, i)).ToList();
+        Core.Trace.Write($"browser {_type}: showing {_cards.Count}");
         _overlay.Content = items.Count == 0 ? Kit.Message("\uE721", L("nothing_matches")) : null;
         Relayout();
         if (resetScroll && _list.Items.Count > 0) _list.ScrollIntoView(_list.Items[0]);

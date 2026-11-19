@@ -228,6 +228,7 @@ public sealed class MainWindow : Window
 
     public void SwitchTab(string tab)
     {
+        Core.Trace.Write($"tab {tab}");
         if (Session.Account == null) return;
         if (_tab == tab && _stacks.TryGetValue(tab, out var same) && same.Count > 1)
         {
@@ -251,6 +252,7 @@ public sealed class MainWindow : Window
     {
         var w = Current;
         if (w == null || !w._stacks.TryGetValue(w._tab, out var stack)) return;
+        Core.Trace.Write($"open {page.GetType().Name}");
         stack.Push(page);
         w.ShowTop();
     }

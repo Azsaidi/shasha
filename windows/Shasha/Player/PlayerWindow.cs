@@ -367,6 +367,7 @@ public sealed class PlayerWindow : Window
 
         // "Clearer sound" needs our own sound path; VLC only takes it on a new player.
         var level = Store.Clarity(ClarityKey(item));
+        Core.Trace.Write($"player: load {item.Kind} {item.StreamId} remote={item.IsRemote} clarity={level} start={_resumeTarget:0}");
         if (level > 0 && _clarity == null) SwapPlayer(withClarity: true);
         if (_clarity != null) _clarity.Level = level;
         _clarityButton.Content = L($"clarity_{level}");
@@ -416,6 +417,7 @@ public sealed class PlayerWindow : Window
             }
             if (view.MediaPlayer != player) view.MediaPlayer = player;
             if (handle != IntPtr.Zero) player.Hwnd = handle;
+            Core.Trace.Write($"player: video surface {(handle == IntPtr.Zero ? "missing" : "ready")} after {tries} tries");
             action();
         }
         Check();
@@ -438,6 +440,7 @@ public sealed class PlayerWindow : Window
 
     void OnPlaying()
     {
+        if (!_hadPlayback) Core.Trace.Write("player: playing");
         _spinner.Visibility = Visibility.Collapsed;
         _errorPanel.Visibility = Visibility.Collapsed;
         var item = Current;
@@ -474,6 +477,7 @@ public sealed class PlayerWindow : Window
 
     void ShowError(string text)
     {
+        Core.Trace.Write("player: error " + text);
         _spinner.Visibility = Visibility.Collapsed;
         _errorText.Text = text;
         _errorPanel.Visibility = Visibility.Visible;
@@ -934,6 +938,7 @@ public sealed class PlayerWindow : Window
     {
         if (_closing) return;
         _closing = true;
+        Core.Trace.Write("player: close");
         Toast.Shown -= OnToast;
         _tick.Stop();
         _hide.Stop();
