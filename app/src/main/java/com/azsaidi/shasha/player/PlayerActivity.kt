@@ -881,13 +881,14 @@ class PlayerActivity : ComponentActivity() {
         exo.playWhenReady = true
 
         playerView.player = exo
-        applyCurrentClarity()
         mediaSession?.release()
         mediaSession = runCatching {
             MediaSession.Builder(this, exo).setId("shasha-${System.nanoTime()}").build()
         }.getOrNull()
         startPlaybackNotification(exo)
         player = exo
+        // After `player` is set: it reads the current item from it (before, the saved setting was skipped).
+        applyCurrentClarity()
         // Downloads wait while we stream on plans that allow only one connection.
         Downloads.setStreaming(items.any { it.url.startsWith("http") })
         trackedIndex = startIndex
