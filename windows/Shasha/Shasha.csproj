@@ -30,6 +30,7 @@
     <PackageReference Include="LibVLCSharp.WPF" Version="3.*" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.*" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="3.1.*" />
   </ItemGroup>
 
   <ItemGroup>

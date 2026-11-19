@@ -22,6 +22,7 @@ public static class Playback
     static void Start(List<PlayItem> items, int index, bool fromStart = false)
     {
         if (items.Count == 0) return;
+        Trace.Write($"play {items.Count} item(s), starting at {index}");
         LastQueue = items;
         Present?.Invoke(items, Math.Clamp(index, 0, items.Count - 1), fromStart);
     }
@@ -128,6 +129,7 @@ public static class Playback
             {
                 var task = Session.Api.SeriesInfo(entry.SeriesId);
                 if (await Task.WhenAny(task, Task.Delay(8000)) == task) info = await task;
+                Trace.Write(info == null ? "resume: series info timed out" : "resume: series info loaded");
             }
             catch { }
         }

@@ -56,7 +56,11 @@ public static class ItemActions
     }
 
     /// <summary>Continue watching card: resume.</summary>
-    public static void Open(WatchEntry entry) => _ = Playback.Resume(entry);
+    public static void Open(WatchEntry entry)
+    {
+        Core.Trace.Write($"resume {entry.Kind} {entry.StreamId}");
+        _ = Playback.Resume(entry);
+    }
 
     public static ContextMenu Menu(WatchEntry entry)
     {

@@ -19,6 +19,7 @@ public partial class App : Application
         Store.Load();
         Core.Trace.Start();
         Core.Trace.Write($"Shasha {Updater.CurrentVersion} on {Environment.OSVersion}");
+        Watchdog.Start(Dispatcher);
         L10n.Load(Store.Settings.Language);
         FrameworkElement.LanguageProperty.OverrideMetadata(typeof(FrameworkElement),
             new FrameworkPropertyMetadata(System.Windows.Markup.XmlLanguage.GetLanguage(L10n.Culture.IetfLanguageTag)));

@@ -81,9 +81,11 @@ public sealed class PlayerWindow : Window
 
     public static void Open(List<PlayItem> items, int index, bool fromStart)
     {
+        Core.Trace.Write(_instance == null ? "player: new window" : "player: reuse window");
         if (_instance == null)
         {
             _instance = new PlayerWindow();
+            Core.Trace.Write("player: window made");
             _instance.Show();
         }
         _instance.Activate();
@@ -396,7 +398,7 @@ public sealed class PlayerWindow : Window
         else
         {
             var previous = _player;
-            RunInOrder(() => previous.Stop());
+            RunInOrder(() => previous.Stop(), "stop");
         }
         if (_clarity != null) _clarity.Level = level;
         if (!retry) _autoRetries = 0;
@@ -471,11 +473,17 @@ public sealed class PlayerWindow : Window
     /// VLC work off the UI thread, one step after another: the old stream is always fully closed
     /// before the next opens (plans with one connection refuse a second one).
     /// </summary>
-    public static void RunInOrder(Action action)
+    public static void RunInOrder(Action action, string what = "step")
     {
         _work = _work.ContinueWith(_ =>
         {
-            try { action(); }
+            var started = Environment.TickCount64;
+            try
+            {
+                action();
+                var took = Environment.TickCount64 - started;
+                if (took > 1500) Core.Trace.Write($"player: vlc {what} took {took} ms");
+            }
             catch (Exception e) { Core.Trace.Write("player: background step failed " + e.Message); }
         }, TaskScheduler.Default);
     }

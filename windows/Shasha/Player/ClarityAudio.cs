@@ -227,7 +227,8 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
         _flush = (_, _) => Flush();
         _drain = _ => { };
         _volumeCb = (_, volume, mute) => { lock (_lock) { _volume = volume; _muted = mute; } };
-        player.SetAudioFormat("FL32", Rate, 2);
+        // 16-bit: this VLC (3.x) ignores "FL32" here and sends 16-bit samples anyway.
+        player.SetAudioFormat("S16N", Rate, 2);
         player.SetAudioCallbacks(_play, _pause, _resume, _flush, _drain);
         // No volume callback: VLC then applies the volume to the samples itself.
         const int latencyMs = 80;
@@ -264,11 +265,13 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
             _freeRun = true;
             Core.Trace.Write("clarity: timestamps don't match the clock, playing in arrival order");
         }
-        var copy = new float[count * 2];
-        Marshal.Copy(samples, copy, 0, copy.Length);
+        var raw = new short[count * 2];
+        Marshal.Copy(samples, raw, 0, raw.Length);
+        var copy = new float[raw.Length];
+        for (var i = 0; i < raw.Length; i++) copy[i] = raw[i] / 32768f;
         var before = Peak(copy);
         _dsp.Process(copy, Level, Rate);
-        if (_traced <= 8 || (_pieces++ % 500 == 0 && _pieces < 5000))
+        if (_traced <= 3 || (_pieces++ % 500 == 0 && _pieces < 5000))
             Core.Trace.Write($"clarity: level in {before:0.000} out {Peak(copy):0.000} (setting {Level})");
         lock (_lock)
         {
