@@ -222,9 +222,9 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
     public ClarityAudio(MediaPlayer player)
     {
         _play = OnPlay;
-        _pause = (_, _) => SetPaused(true);
-        _resume = (_, _) => SetPaused(false);
-        _flush = (_, _) => Flush();
+        _pause = (_, _) => { Note("vlc pause"); SetPaused(true); };
+        _resume = (_, _) => { Note("vlc resume"); SetPaused(false); };
+        _flush = (_, _) => { Note("vlc flush"); Flush(); };
         _drain = _ => { };
         _volumeCb = (_, volume, mute) => { lock (_lock) { _volume = volume; _muted = mute; } };
         // 16-bit: this VLC (3.x) ignores "FL32" here and sends 16-bit samples anyway.
@@ -238,6 +238,35 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
         _out.Play();
         _out.PlaybackStopped += (_, e) => Core.Trace.Write("clarity: sound device stopped " + e.Exception?.Message);
         Core.Trace.Write($"clarity: sound device ready ({_out.OutputWaveFormat})");
+    }
+
+    int _notes;
+    void Note(string text)
+    {
+        if (_notes++ < 40) Core.Trace.Write("clarity: " + text);
+    }
+
+    bool _held;
+
+    /// <summary>
+    /// While the player is paused or jumping, stop the sound device itself, so nothing (not even a
+    /// stuck buffer) can be heard. Called by the player window.
+    /// </summary>
+    public void Hold(bool hold)
+    {
+        if (_held == hold) return;
+        _held = hold;
+        Note(hold ? "hold" : "release");
+        try
+        {
+            if (hold)
+            {
+                _out.Pause();
+                lock (_lock) _started = false;
+            }
+            else _out.Play();
+        }
+        catch (Exception e) { Note("hold failed " + e.Message); }
     }
 
     public void Dispose()
@@ -332,7 +361,12 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
             var now = libvlc_clock() + _latency;
             lock (_lock)
             {
-                if (_pausedAt != null || _chunks.Count == 0) { _started = false; return Silence(); }
+                if (_pausedAt != null || _chunks.Count == 0)
+                {
+                    if (_started) Note(_pausedAt != null ? "silent: paused" : "silent: nothing waiting");
+                    _started = false;
+                    return Silence();
+                }
                 var head = _chunks[0];
                 var lead = (double)(head.Pts + (long)(head.Read * 1_000_000.0 / Rate) - now);
                 if (_freeRun)

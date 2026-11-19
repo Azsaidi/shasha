@@ -32,8 +32,14 @@ public sealed class MultiViewWindow : Window
     readonly DispatcherTimer _hide = new() { Interval = TimeSpan.FromSeconds(3) };
     readonly Border _bar;
 
-    public static void Open(List<PlayItem> items)
+    public static async void Open(List<PlayItem> items)
     {
+        var vlc = PlayerWindow.WarmUp();
+        if (!vlc.IsCompleted)
+        {
+            Toast.Show(L("loading_player"));
+            try { await vlc; } catch { return; }
+        }
         if (_instance == null)
         {
             _instance = new MultiViewWindow();

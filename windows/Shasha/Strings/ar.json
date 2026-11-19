@@ -134,6 +134,7 @@
  "live_format": "صيغة القنوات المباشرة",
  "live_format_hint": "إذا لم تعمل القنوات أو ظلت تتقطع، جرّب التبديل بين TS وHLS.",
  "loading_episodes": "جارٍ تحميل الحلقات…",
+ "loading_player": "جارٍ تشغيل المشغّل…",
  "loading_x": "جارٍ تحميل {0}…",
  "log_in": "تسجيل الدخول",
  "login_subtitle": "سجّل الدخول ببيانات Xtream Codes التي أعطاك إياها مزوّد IPTV.",

@@ -126,6 +126,7 @@
  "live_format": "Live channel format",
  "live_format_hint": "If channels won’t play or keep buffering, try switching between TS and HLS.",
  "loading_episodes": "Loading episodes…",
+ "loading_player": "Starting the player…",
  "loading_x": "Loading {0}…",
  "log_in": "Log in",
  "login_subtitle": "Sign in with the Xtream Codes details from your IPTV provider.",

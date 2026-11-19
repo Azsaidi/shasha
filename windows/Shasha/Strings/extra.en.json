@@ -13,5 +13,6 @@
  "back_to_player": "Back to player",
  "episodes": "Episodes",
  "info": "Info",
- "no_favourites_hint_win": "Right-click a channel or poster for options, or click a channel’s star, to add it here."
+ "no_favourites_hint_win": "Right-click a channel or poster for options, or click a channel’s star, to add it here.",
+ "loading_player": "Starting the player…"
 }

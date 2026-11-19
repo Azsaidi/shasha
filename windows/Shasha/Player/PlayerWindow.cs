@@ -17,8 +17,22 @@ namespace Shasha.UI;
 public sealed class PlayerWindow : Window
 {
     static PlayerWindow? _instance;
-    static LibVLC? _vlc;
-    public static LibVLC Vlc => _vlc ??= new LibVLC("--no-osd", "--no-video-title-show", "--avcodec-hw=any");
+    static Task<LibVLC>? _vlcTask;
+
+    /// <summary>
+    /// Starts VLC in the background when the app opens: the first start loads all of VLC's parts
+    /// and can take many seconds, which froze the window when it happened on the first click.
+    /// </summary>
+    public static Task<LibVLC> WarmUp() => _vlcTask ??= Task.Run(() =>
+    {
+        var started = Environment.TickCount64;
+        var vlc = new LibVLC("--no-osd", "--no-video-title-show", "--avcodec-hw=any");
+        Core.Trace.Write($"vlc ready in {Environment.TickCount64 - started} ms");
+        return vlc;
+    });
+
+    /// <summary>Only used once <see cref="WarmUp"/> has finished.</summary>
+    public static LibVLC Vlc => WarmUp().Result;
 
     readonly VideoView _view = new();
     MediaPlayer _player;
@@ -79,8 +93,14 @@ public sealed class PlayerWindow : Window
 
     PlayItem? Current => _items.Count > 0 && _index >= 0 && _index < _items.Count ? _items[_index] : null;
 
-    public static void Open(List<PlayItem> items, int index, bool fromStart)
+    public static async void Open(List<PlayItem> items, int index, bool fromStart)
     {
+        var vlc = WarmUp();
+        if (!vlc.IsCompleted)
+        {
+            Toast.Show(L("loading_player"));
+            try { await vlc; } catch (Exception e) { Toast.Show(L("err_stream_generic", "VLC")); Core.Trace.Write("vlc failed " + e); return; }
+        }
         Core.Trace.Write(_instance == null ? "player: new window" : "player: reuse window");
         if (_instance == null)
         {
@@ -303,8 +323,18 @@ public sealed class PlayerWindow : Window
     MediaPlayer NewPlayer(bool withClarity)
     {
         var p = new MediaPlayer(Vlc) { EnableHardwareDecoding = true, EnableKeyInput = false, EnableMouseInput = false };
-        p.Playing += (_, _) => Ui.Post(() => { if (p == _player) OnPlaying(); });
-        p.Paused += (_, _) => Ui.Post(() => { if (p == _player) UpdatePlayButton(); });
+        p.Playing += (_, _) => Ui.Post(() =>
+        {
+            if (p != _player) return;
+            _clarity?.Hold(false);
+            OnPlaying();
+        });
+        p.Paused += (_, _) => Ui.Post(() =>
+        {
+            if (p != _player) return;
+            _clarity?.Hold(true);
+            UpdatePlayButton();
+        });
         p.EndReached += (_, _) => Ui.Post(() => { if (p == _player) OnEnded(); });
         p.EncounteredError += (_, _) => Ui.Post(() =>
         {
@@ -691,6 +721,7 @@ public sealed class PlayerWindow : Window
         if (Current?.IsLive != false || !_player.IsSeekable) return;
         var target = Math.Max(0, _player.Time / 1000.0 + seconds);
         if (_player.Length > 0) target = Math.Min(target, _player.Length / 1000.0 - 1);
+        HoldForSeek();
         _player.Time = (long)(target * 1000);
         _resumeTarget = 0;
         _skipText.Text = seconds > 0 ? $"+{seconds:0}" : $"{seconds:0}";
@@ -704,9 +735,27 @@ public sealed class PlayerWindow : Window
         ShowControls();
     }
 
+    DispatcherTimer? _seekHold;
+
+    /// <summary>Silences our sound path for a moment while VLC jumps (no noise from half-flushed sound).</summary>
+    void HoldForSeek()
+    {
+        if (_clarity == null) return;
+        _clarity.Hold(true);
+        _seekHold?.Stop();
+        _seekHold = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+        _seekHold.Tick += (_, _) =>
+        {
+            _seekHold?.Stop();
+            if (_player.IsPlaying) _clarity?.Hold(false);
+        };
+        _seekHold.Start();
+    }
+
     void SeekTo(double seconds)
     {
         if (Current?.IsLive != false || !_player.IsSeekable) return;
+        HoldForSeek();
         _player.Time = (long)(seconds * 1000);
         _resumeTarget = 0;
         ShowControls();

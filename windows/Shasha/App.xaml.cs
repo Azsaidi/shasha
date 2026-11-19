@@ -24,6 +24,7 @@ public partial class App : Application
         FrameworkElement.LanguageProperty.OverrideMetadata(typeof(FrameworkElement),
             new FrameworkPropertyMetadata(System.Windows.Markup.XmlLanguage.GetLanguage(L10n.Culture.IetfLanguageTag)));
         LibVLCSharp.Shared.Core.Initialize();
+        PlayerWindow.WarmUp();
         Downloads.Start();
         Session.Start();
         Playback.Present = (items, index, fromStart) => PlayerWindow.Open(items, index, fromStart);
