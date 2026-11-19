@@ -8,6 +8,7 @@ import java.nio.ByteBuffer
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -19,9 +20,10 @@ import kotlin.math.tanh
  * An equaliser can only turn up treble that is in the file. Badly encoded episodes have had
  * their top end cut off, so there is nothing to turn up. This rebuilds it instead:
  *  - cuts the boomy low end,
- *  - an exciter: takes the upper mids, folds them up an octave (full-wave rectifying makes
- *    their harmonics, at any volume) and mixes in only the new top end, which brings back
- *    the "air" that was lost,
+ *  - an exciter: takes the upper mids and squares them (scaled to their own level), which
+ *    makes smooth harmonics an octave up, and mixes in only the new top end. That brings back
+ *    the "air" that was lost. It only works while something is actually there (speech, music):
+ *    it tracks the background noise and stays quiet below it, so hiss isn't turned into "rain",
  *  - lifts the presence range where speech sits, and the treble,
  *  - in 5.1 sound, turns up the centre (dialogue) channel and turns down the sub,
  *  - a soft limiter so the louder result never clips.
@@ -43,6 +45,12 @@ class ClarityProcessor : BaseAudioProcessor() {
     private lateinit var exciteOut2: Array<Biquad>
     private lateinit var presence: Array<Biquad>
     private lateinit var treble: Array<Biquad>
+    private lateinit var topCut: Array<Biquad>
+    private lateinit var envelope: FloatArray
+    private lateinit var noiseFloor: FloatArray
+    private var attack = 0f
+    private var release = 0f
+    private var floorRise = 0f
 
     private var exciteMix = 0f
     private var centreGain = 1f
@@ -61,16 +69,22 @@ class ClarityProcessor : BaseAudioProcessor() {
         builtFor = level
         val strong = level >= 2
         val sr = rate.toDouble()
-        lowCut = Array(channels) { Biquad.highPass(sr, if (strong) 110.0 else 80.0, 0.707) }
-        exciteIn = Array(channels) { Biquad.highPass(sr, if (strong) 2200.0 else 2800.0, 0.707) }
-        exciteOut = Array(channels) { Biquad.highPass(sr, if (strong) 4500.0 else 5500.0, 0.707) }
-        exciteOut2 = Array(channels) { Biquad.highPass(sr, if (strong) 4500.0 else 5500.0, 0.707) }
-        presence = Array(channels) { Biquad.peak(sr, 2500.0, 1.0, if (strong) 5.0 else 3.0) }
-        treble = Array(channels) { Biquad.highShelf(sr, 4500.0, if (strong) 9.0 else 6.0) }
-        exciteMix = if (strong) 2.0f else 1.0f
+        lowCut = Array(channels) { Biquad.highPass(sr, 80.0, 0.707) }
+        exciteIn = Array(channels) { Biquad.highPass(sr, 2500.0, 0.707) }
+        exciteOut = Array(channels) { Biquad.highPass(sr, 5000.0, 0.707) }
+        exciteOut2 = Array(channels) { Biquad.highPass(sr, 5000.0, 0.707) }
+        presence = Array(channels) { Biquad.peak(sr, 3000.0, 0.7, if (strong) 3.0 else 2.0) }
+        treble = Array(channels) { Biquad.highShelf(sr, 5000.0, if (strong) 6.0 else 4.0) }
+        topCut = Array(channels) { Biquad.lowPass(sr, 16000.0, 0.707) }
+        envelope = FloatArray(channels)
+        noiseFloor = FloatArray(channels) { 1f }
+        attack = exp(-1.0 / (0.002 * sr)).toFloat()
+        release = exp(-1.0 / (0.06 * sr)).toFloat()
+        floorRise = (1.0 / (4 * sr)).toFloat()
+        exciteMix = if (strong) 1.4f else 0.8f
         centreGain = if (strong) 2.0f else 1.4f
         subGain = if (strong) 0.5f else 0.75f
-        outGain = if (strong) 0.75f else 0.85f
+        outGain = if (strong) 0.8f else 0.85f
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
@@ -98,10 +112,20 @@ class ClarityProcessor : BaseAudioProcessor() {
                 } else {
                     y = lowCut[c].run(x)
                     val upper = exciteIn[c].run(y)
-                    val harmonics = exciteOut2[c].run(exciteOut[c].run(abs(upper)))
-                    y += harmonics * exciteMix
+                    // How loud the upper mids are, and the background noise level under them.
+                    val a = abs(upper)
+                    val k = if (a > envelope[c]) attack else release
+                    val env = maxOf(k * envelope[c] + (1 - k) * a, 1e-6f)
+                    envelope[c] = env
+                    noiseFloor[c] = if (env < noiseFloor[c]) env else noiseFloor[c] + (env - noiseFloor[c]) * floorRise
+                    val harmonics = exciteOut2[c].run(exciteOut[c].run(upper * upper / env))
+                    // Only add them while the sound stands clearly above the noise (about 10 dB).
+                    val threshold = maxOf(3 * noiseFloor[c], 3e-4f)
+                    val gate = env * env / (env * env + threshold * threshold)
+                    y += harmonics * exciteMix * gate
                     y = presence[c].run(y)
                     y = treble[c].run(y)
+                    y = topCut[c].run(y)
                     if (c == centre) y *= centreGain
                 }
                 y = limit(y * outGain)
@@ -154,6 +178,13 @@ class ClarityProcessor : BaseAudioProcessor() {
                 val alpha = sin(w) / (2 * q)
                 val c = cos(w)
                 return make((1 + c) / 2, -(1 + c), (1 + c) / 2, 1 + alpha, -2 * c, 1 - alpha)
+            }
+
+            fun lowPass(rate: Double, hz: Double, q: Double): Biquad {
+                val w = 2 * PI * hz.coerceAtMost(rate * 0.45) / rate
+                val alpha = sin(w) / (2 * q)
+                val c = cos(w)
+                return make((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + alpha, -2 * c, 1 - alpha)
             }
 
             fun peak(rate: Double, hz: Double, q: Double, db: Double): Biquad {

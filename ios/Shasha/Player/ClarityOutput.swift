@@ -5,14 +5,18 @@ import os
 ///
 /// An equaliser can only turn up treble that is in the file. Badly encoded episodes have had
 /// their top end cut off, so there is nothing to turn up. This rebuilds it instead: cuts the
-/// boomy low end, folds the upper mids up an octave to recreate the missing "air" (an exciter),
-/// lifts the speech range and the treble, and rounds off peaks so the result never clips.
+/// boomy low end, squares the upper mids (scaled to their own level) to make smooth harmonics an
+/// octave up and mixes those in (an exciter) to recreate the missing "air", lifts the speech
+/// range and the treble, and rounds off peaks so the result never clips. The exciter tracks the
+/// background noise and only works above it, so hiss isn't turned into "rain".
 /// Level 0 leaves the sound untouched.
 final class ClarityDSP {
     private var level = -1
     private var rate = 0.0
     private var lowCut = [Biquad](), exciteIn = [Biquad](), exciteOut = [Biquad](), exciteOut2 = [Biquad]()
-    private var presence = [Biquad](), treble = [Biquad]()
+    private var presence = [Biquad](), treble = [Biquad](), topCut = [Biquad]()
+    private var envelope: [Float] = [0, 0], noiseFloor: [Float] = [1, 1]
+    private var attack: Float = 0, release: Float = 0, floorRise: Float = 0
     private var mix: Float = 0, outGain: Float = 1
 
     func reset() { level = -1 }
@@ -26,9 +30,20 @@ final class ClarityDSP {
                 let i = f * 2 + c
                 var y = lowCut[c].run(samples[i])
                 let upper = exciteIn[c].run(y)
-                y += exciteOut2[c].run(exciteOut[c].run(abs(upper))) * mix
+                // How loud the upper mids are, and the background noise level under them.
+                let a = abs(upper)
+                let k = a > envelope[c] ? attack : release
+                let env = max(k * envelope[c] + (1 - k) * a, 1e-6)
+                envelope[c] = env
+                noiseFloor[c] = env < noiseFloor[c] ? env : noiseFloor[c] + (env - noiseFloor[c]) * floorRise
+                let harmonics = exciteOut2[c].run(exciteOut[c].run(upper * upper / env))
+                // Only add them while the sound stands clearly above the noise (about 10 dB).
+                let threshold = max(3 * noiseFloor[c], 3e-4)
+                let gate = env * env / (env * env + threshold * threshold)
+                y += harmonics * mix * gate
                 y = presence[c].run(y)
                 y = treble[c].run(y)
+                y = topCut[c].run(y)
                 samples[i] = ClarityDSP.limit(y * outGain)
             }
         }
@@ -38,14 +53,20 @@ final class ClarityDSP {
         self.level = level
         self.rate = rate
         let strong = level >= 2
-        lowCut = (0..<2).map { _ in .highPass(rate, strong ? 110 : 80) }
-        exciteIn = (0..<2).map { _ in .highPass(rate, strong ? 2200 : 2800) }
-        exciteOut = (0..<2).map { _ in .highPass(rate, strong ? 4500 : 5500) }
-        exciteOut2 = (0..<2).map { _ in .highPass(rate, strong ? 4500 : 5500) }
-        presence = (0..<2).map { _ in .peak(rate, 2500, q: 1, db: strong ? 5 : 3) }
-        treble = (0..<2).map { _ in .highShelf(rate, 4500, db: strong ? 9 : 6) }
-        mix = strong ? 2 : 1
-        outGain = strong ? 0.75 : 0.85
+        lowCut = (0..<2).map { _ in .highPass(rate, 80) }
+        exciteIn = (0..<2).map { _ in .highPass(rate, 2500) }
+        exciteOut = (0..<2).map { _ in .highPass(rate, 5000) }
+        exciteOut2 = (0..<2).map { _ in .highPass(rate, 5000) }
+        presence = (0..<2).map { _ in .peak(rate, 3000, q: 0.7, db: strong ? 3 : 2) }
+        treble = (0..<2).map { _ in .highShelf(rate, 5000, db: strong ? 6 : 4) }
+        topCut = (0..<2).map { _ in .lowPass(rate, 16000) }
+        envelope = [0, 0]
+        noiseFloor = [1, 1]
+        attack = Float(exp(-1 / (0.002 * rate)))
+        release = Float(exp(-1 / (0.06 * rate)))
+        floorRise = Float(1 / (4 * rate))
+        mix = strong ? 1.4 : 0.8
+        outGain = strong ? 0.8 : 0.85
     }
 
     /// Leaves quiet sound alone and rounds off peaks instead of clipping them.
@@ -79,6 +100,11 @@ struct Biquad {
     static func highPass(_ rate: Double, _ hz: Double, q: Double = 0.707) -> Biquad {
         let w = omega(rate, hz), alpha = sin(w) / (2 * q), c = cos(w)
         return Biquad((1 + c) / 2, -(1 + c), (1 + c) / 2, 1 + alpha, -2 * c, 1 - alpha)
+    }
+
+    static func lowPass(_ rate: Double, _ hz: Double, q: Double = 0.707) -> Biquad {
+        let w = omega(rate, hz), alpha = sin(w) / (2 * q), c = cos(w)
+        return Biquad((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + alpha, -2 * c, 1 - alpha)
     }
 
     static func peak(_ rate: Double, _ hz: Double, q: Double, db: Double) -> Biquad {
