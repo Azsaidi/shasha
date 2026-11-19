@@ -56,6 +56,10 @@ protocol PlaybackEngine: AnyObject {
     func startPip()
     func stopPip()
 
+    /// Only VLC can change the sound (equalizer); Apple's player can't.
+    var supportsClarity: Bool { get }
+    func setClarity(_ level: Int)
+
     var audioTracks: [MediaTrack] { get }
     var subtitleTracks: [MediaTrack] { get }
     func selectAudio(_ id: String)
@@ -97,6 +101,10 @@ enum Engines {
     static func make(for url: URL, preferVLC: Bool = false) -> PlaybackEngine {
         switch PlayerChoice.current {
         case .apple:
+            // "Clearer sound" needs VLC's equalizer, so that title still plays in VLC.
+            #if canImport(VLCKit)
+            if preferVLC { return VLCEngine() }
+            #endif
             return AVEngine()
         case .vlc:
             #if canImport(VLCKit)
@@ -313,6 +321,9 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
     func stopPip() { pip?.stopPictureInPicture() }
 
     func setAutoPip(_ on: Bool) { pip?.canStartPictureInPictureAutomaticallyFromInline = on }
+
+    var supportsClarity: Bool { false }
+    func setClarity(_ level: Int) {}
 
     /// Why picture-in-picture can't start, for the message shown instead.
     var pipProblem: String? {
@@ -606,6 +617,33 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         if !player.hasVideoOut { return "no-picture" }
         if pipController == nil { return "vlc-not-ready" }
         return nil
+    }
+
+    // Clearer sound: less bass, more presence and treble, for dull soundtracks.
+
+    var supportsClarity: Bool { true }
+
+    func setClarity(_ level: Int) {
+        guard level > 0 else {
+            player.equalizer = nil
+            return
+        }
+        let eq = VLCAudioEqualizer()
+        for band in eq.bands {
+            let hz = band.frequency
+            let gain: Float
+            switch hz {
+            case ..<120: gain = level == 1 ? -3 : -6
+            case ..<400: gain = level == 1 ? -1 : -3
+            case ..<1500: gain = level == 1 ? 2 : 3
+            case ..<5000: gain = level == 1 ? 6 : 10
+            default: gain = level == 1 ? 7 : 12
+            }
+            band.amplification = gain
+        }
+        // Leave headroom so the boosted treble doesn't distort.
+        eq.preAmplification = level == 1 ? -2 : -4
+        player.equalizer = eq
     }
 
     // VLCPictureInPictureMediaControlling: what the picture-in-picture window's buttons do.

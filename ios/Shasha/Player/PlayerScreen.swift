@@ -250,6 +250,11 @@ struct PlayerScreen: View {
                 Label("\(L("aspect")): \(L(model.gravity.labelKey))", systemImage: "aspectratio")
             }
             Button {
+                model.cycleClarity()
+            } label: {
+                Label(PlayerModel.clarityLabel(model.clarity), systemImage: "waveform")
+            }
+            Button {
                 model.cycleSleep()
             } label: {
                 Label(model.sleepMinutes == 0 ? L("sleep") : L("sleep_n", model.sleepMinutes), systemImage: "moon.zzz")

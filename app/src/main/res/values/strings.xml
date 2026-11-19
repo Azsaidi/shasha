@@ -295,4 +295,7 @@
     <string name="install">Install</string>
     <string name="open_settings">Open settings</string>
     <string name="update_failed">Couldn’t check for updates (%1$s).</string>
+    <string name="clarity_0">Sound: normal</string>
+    <string name="clarity_1">Sound: clearer</string>
+    <string name="clarity_2">Sound: much clearer</string>
 </resources>

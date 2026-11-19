@@ -80,6 +80,10 @@ final class Store {
         set { defaults.set(newValue, forKey: "player") }
     }
 
+    /// "Clearer sound" for a series, film or channel: 0 normal, 1 clearer, 2 much clearer.
+    func clarity(_ key: String) -> Int { defaults.integer(forKey: "clarity:\(key)") }
+    func setClarity(_ level: Int, for key: String) { defaults.set(level, forKey: "clarity:\(key)") }
+
     var hideAdult: Bool {
         get { defaults.object(forKey: "hideAdult") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "hideAdult") }

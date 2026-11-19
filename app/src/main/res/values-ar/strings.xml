@@ -296,4 +296,7 @@
     <string name="install">تثبيت</string>
     <string name="open_settings">فتح الإعدادات</string>
     <string name="update_failed">تعذّر التحقق من التحديثات (%1$s).</string>
+    <string name="clarity_0">الصوت: عادي</string>
+    <string name="clarity_1">الصوت: أوضح</string>
+    <string name="clarity_2">الصوت: أوضح بكثير</string>
 </resources>

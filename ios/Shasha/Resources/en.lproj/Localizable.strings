@@ -263,3 +263,6 @@
 "player_vlc" = "VLC";
 "player_hint" = "Automatic uses Apple’s player when it can and VLC for everything else. Apple’s player can’t play some films (like .mkv). Both support picture-in-picture.";
 "open_series" = "Go to series";
+"clarity_0" = "Sound: normal";
+"clarity_1" = "Sound: clearer";
+"clarity_2" = "Sound: much clearer";

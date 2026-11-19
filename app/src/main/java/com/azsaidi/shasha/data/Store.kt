@@ -74,6 +74,14 @@ object Store {
         get() = prefs.getBoolean("auto_pip", true)
         set(value) = prefs.edit().putBoolean("auto_pip", value).apply()
 
+    /**
+     * "Clearer sound" level for a series, film or channel: 0 normal, 1 clearer, 2 much clearer.
+     * Kept per title because only some (badly mastered) ones need it.
+     */
+    fun clarity(key: String): Int = prefs.getInt("clarity:$key", 0)
+
+    fun setClarity(key: String, level: Int) = prefs.edit().putInt("clarity:$key", level).apply()
+
     fun favorites(accountId: String): List<StreamItem> = runCatching {
         val arr = JSONArray(prefs.getString("fav:$accountId", null) ?: "[]")
         (0 until arr.length()).map { StreamItem.fromJson(arr.getJSONObject(it)) }

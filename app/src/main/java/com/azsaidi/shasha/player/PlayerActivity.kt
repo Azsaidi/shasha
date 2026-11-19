@@ -92,6 +92,9 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var infoView: TextView
     private lateinit var resizeView: TextView
     private lateinit var sleepView: TextView
+    private lateinit var clarityView: TextView
+    /** Equalizer on the player's sound, for titles whose audio is dull ("Clearer sound"). */
+    private var equalizer: android.media.audiofx.Equalizer? = null
     private lateinit var curtain: View
     private lateinit var skipBack: TextView
     private lateinit var skipForward: TextView
@@ -169,6 +172,7 @@ class PlayerActivity : ComponentActivity() {
             trackedIndex = index
             lastPosition = 0
             lastDuration = 0
+            applyCurrentClarity()
             hideUpNext()
             upNextCancelledFor = -1
             p.pauseAtEndOfMediaItems = false
@@ -403,9 +407,11 @@ class PlayerActivity : ComponentActivity() {
             resizeView.text = resizeModes[resizeIndex].second
         }
         sleepView = pill(getString(R.string.sleep)) { cycleSleepTimer() }
+        clarityView = pill(getString(R.string.clarity_0)) { cycleClarity() }
 
         topBar.addView(back, LinearLayout.LayoutParams(dp(44), dp(44)))
         topBar.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        topBar.addView(clarityView, pillParams())
         topBar.addView(sleepView, pillParams())
         topBar.addView(resizeView, pillParams())
         // Adds what's playing to split screen, to watch it alongside other streams.
@@ -627,6 +633,62 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    /** Titles share a setting: every episode of a series, or one film or channel. */
+    private fun clarityKey(item: PlayItem): String = when (item.kind) {
+        WatchKind.EPISODE -> "series:${item.seriesId ?: item.streamId}"
+        WatchKind.MOVIE -> "movie:${item.streamId}"
+        WatchKind.LIVE -> "live:${item.streamId}"
+    }
+
+    private fun clarityLabel(level: Int) = getString(
+        when (level) {
+            1 -> R.string.clarity_1
+            2 -> R.string.clarity_2
+            else -> R.string.clarity_0
+        },
+    )
+
+    private fun cycleClarity() {
+        val item = player?.let { items.getOrNull(it.currentMediaItemIndex) } ?: return
+        val level = (Store.clarity(clarityKey(item)) + 1) % 3
+        Store.setClarity(clarityKey(item), level)
+        applyClarity(level)
+        Toast.makeText(this, clarityLabel(level), Toast.LENGTH_SHORT).show()
+    }
+
+    private fun applyCurrentClarity() {
+        val item = player?.let { items.getOrNull(it.currentMediaItemIndex) } ?: return
+        applyClarity(Store.clarity(clarityKey(item)))
+    }
+
+    /**
+     * Less bass, more presence and treble: brings back the detail in dull, muffled soundtracks.
+     * Gains are in millibels (100 = 1 dB), set per band by its centre frequency.
+     */
+    private fun applyClarity(level: Int) {
+        if (::clarityView.isInitialized) clarityView.text = clarityLabel(level)
+        val eq = equalizer ?: return
+        runCatching {
+            if (level == 0) {
+                eq.enabled = false
+                return
+            }
+            val range = eq.bandLevelRange
+            for (band in 0 until eq.numberOfBands) {
+                val hz = eq.getCenterFreq(band.toShort()) / 1000
+                val gain = when {
+                    hz < 120 -> if (level == 1) -300 else -600
+                    hz < 400 -> if (level == 1) -100 else -300
+                    hz < 1500 -> if (level == 1) 200 else 300
+                    hz < 5000 -> if (level == 1) 600 else 1000
+                    else -> if (level == 1) 700 else 1200
+                }
+                eq.setBandLevel(band.toShort(), gain.coerceIn(range[0].toInt(), range[1].toInt()).toShort())
+            }
+            eq.enabled = true
+        }
+    }
+
     private fun cycleSleepTimer() {
         sleepIndex = (sleepIndex + 1) % sleepOptions.size
         val minutes = sleepOptions[sleepIndex]
@@ -813,6 +875,13 @@ class PlayerActivity : ComponentActivity() {
                 .build(),
             true,
         )
+        // Our own audio session, so the "Clearer sound" equalizer can attach to it.
+        equalizer?.release()
+        equalizer = runCatching {
+            val session = androidx.media3.common.util.Util.generateAudioSessionIdV21(this)
+            exo.setAudioSessionId(session)
+            android.media.audiofx.Equalizer(0, session)
+        }.getOrNull()
 
         val start = items[startIndex]
         val startPosition = when {
@@ -828,6 +897,7 @@ class PlayerActivity : ComponentActivity() {
         exo.playWhenReady = true
 
         playerView.player = exo
+        applyCurrentClarity()
         mediaSession?.release()
         mediaSession = runCatching {
             MediaSession.Builder(this, exo).setId("shasha-${System.nanoTime()}").build()
@@ -849,6 +919,8 @@ class PlayerActivity : ComponentActivity() {
         saveCurrent()
         startIndex = p.currentMediaItemIndex.coerceIn(0, items.lastIndex)
         p.removeListener(listener)
+        equalizer?.release()
+        equalizer = null
         playbackNotification?.setPlayer(null)
         playbackNotification = null
         mediaSession?.release()
