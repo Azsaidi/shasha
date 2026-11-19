@@ -143,6 +143,8 @@ struct WatchEntry: Codable, Hashable, Identifiable {
     var key: String { WatchEntry.key(kind, streamId) }
     var progress: Double { duration > 0 ? min(max(position / duration, 0), 1) : 0 }
     var resumable: Bool { kind != .live && !finished && (position > 10 || upNext) }
+    /// An episode that was only opened for a moment. It shouldn't hide the one before it.
+    var barelyStarted: Bool { kind == .episode && !finished && !upNext && position <= 10 }
 
     static func key(_ kind: WatchKind, _ streamId: String) -> String { "\(kind.prefix):\(streamId)" }
 }

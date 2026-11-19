@@ -127,6 +127,8 @@ data class WatchEntry(
     val key: String get() = keyOf(kind, streamId)
     val progress: Float get() = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val resumable: Boolean get() = kind != WatchKind.LIVE && !finished && (position > 10_000 || upNext)
+    /** An episode that was only opened for a moment. It shouldn't hide the one before it. */
+    val barelyStarted: Boolean get() = kind == WatchKind.EPISODE && !finished && !upNext && position <= 10_000
 
     fun toJson(): JSONObject = JSONObject()
         .put("kind", kind.name)

@@ -396,10 +396,23 @@ final class Session: ObservableObject {
     var continueWatching: [WatchEntry] {
         var seen = Set<String>()
         var out: [WatchEntry] = []
+        var opened: [String: WatchEntry] = [:]
         for e in history.sorted(by: { $0.updatedAt > $1.updatedAt }) where e.kind != .live {
             let group = e.kind == .episode ? "series:\(e.seriesId ?? e.streamId)" : e.key
-            guard seen.insert(group).inserted else { continue }
-            if e.resumable { out.append(e) }
+            guard !seen.contains(group) else { continue }
+            // An episode only opened for a second doesn't replace the one being watched.
+            if e.barelyStarted {
+                if opened[group] == nil { opened[group] = e }
+                continue
+            }
+            seen.insert(group)
+            if e.resumable {
+                out.append(e)
+            } else if e.finished, var next = opened[group] {
+                // The last one was finished and the next one only peeked at: keep it as up next.
+                next.upNext = true
+                out.append(next)
+            }
         }
         return out
     }
@@ -410,7 +423,9 @@ final class Session: ObservableObject {
 
     /// Latest episode entry for a series (to offer "Resume S1 E5").
     func latestEpisode(_ seriesId: String) -> WatchEntry? {
-        history.filter { $0.kind == .episode && $0.seriesId == seriesId }.max { $0.updatedAt < $1.updatedAt }
+        let all = history.filter { $0.kind == .episode && $0.seriesId == seriesId }
+        return all.filter { !$0.barelyStarted }.max { $0.updatedAt < $1.updatedAt }
+            ?? all.max { $0.updatedAt < $1.updatedAt }
     }
 
     // MARK: - Live format

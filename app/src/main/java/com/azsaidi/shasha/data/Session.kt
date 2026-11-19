@@ -388,11 +388,23 @@ object Session {
     fun continueWatching(): List<WatchEntry> {
         val seen = HashSet<String>()
         val out = ArrayList<WatchEntry>()
+        val opened = HashMap<String, WatchEntry>()
         for (e in history.sortedByDescending { it.updatedAt }) {
             if (e.kind == WatchKind.LIVE) continue
             val group = if (e.kind == WatchKind.EPISODE) "series:${e.seriesId ?: e.streamId}" else e.key
-            if (!seen.add(group)) continue
-            if (e.resumable) out.add(e)
+            if (group in seen) continue
+            // An episode only opened for a second doesn't replace the one being watched.
+            if (e.barelyStarted) {
+                opened.putIfAbsent(group, e)
+                continue
+            }
+            seen.add(group)
+            if (e.resumable) {
+                out.add(e)
+            } else if (e.finished) {
+                // The last one was finished and the next one only peeked at: keep it as up next.
+                opened[group]?.let { out.add(it.copy(upNext = true)) }
+            }
         }
         return out
     }
@@ -401,8 +413,10 @@ object Session {
         history.filter { it.kind == WatchKind.LIVE }.sortedByDescending { it.updatedAt }.take(20)
 
     /** Latest episode entry for a series (to offer "Continue S1 E5"). */
-    fun latestEpisode(seriesId: String): WatchEntry? =
-        history.filter { it.kind == WatchKind.EPISODE && it.seriesId == seriesId }.maxByOrNull { it.updatedAt }
+    fun latestEpisode(seriesId: String): WatchEntry? {
+        val all = history.filter { it.kind == WatchKind.EPISODE && it.seriesId == seriesId }
+        return all.filter { !it.barelyStarted }.maxByOrNull { it.updatedAt } ?: all.maxByOrNull { it.updatedAt }
+    }
 
     // ---------------------------------------------------------------- live format
 
