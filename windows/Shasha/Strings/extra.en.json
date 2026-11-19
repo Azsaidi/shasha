@@ -1,0 +1,17 @@
+{
+ "mini_player": "Mini player",
+ "full_screen": "Full screen",
+ "exit_full_screen": "Exit full screen",
+ "downloads_folder": "Downloads folder",
+ "change_folder": "Change…",
+ "open_folder": "Open folder",
+ "update_available_body_win": "Version {0} is available (you have {1}). Shasha will close, update and open again. Your playlists, favourites, history and downloads are kept.",
+ "update_installing": "Starting the installer…",
+ "keyboard_hint": "Space play/pause · ← → 10 seconds · ↑ ↓ volume · Page Up/Down channel · F full screen · M mute · Esc back",
+ "volume": "Volume",
+ "player_section": "Player",
+ "back_to_player": "Back to player",
+ "episodes": "Episodes",
+ "info": "Info",
+ "no_favourites_hint_win": "Right-click a channel or poster for options, or click a channel’s star, to add it here."
+}

@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>false</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Shasha</RootNamespace>
+    <AssemblyName>Shasha</AssemblyName>
+    <ApplicationIcon>Assets\shasha.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <!-- Version comes from the build (1.0.<run number>). -->
+    <Version>1.0.0</Version>
+    <Product>Shasha</Product>
+    <Company>Azsaidi</Company>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- Only the libVLC parts the app uses, to keep the download smaller. -->
+    <VlcWindowsX64Enabled>true</VlcWindowsX64Enabled>
+    <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibVLCSharp" Version="3.*" />
+    <PackageReference Include="LibVLCSharp.WPF" Version="3.*" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.*" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Strings\en.json" LogicalName="Shasha.Strings.en.json" />
+    <EmbeddedResource Include="Strings\ar.json" LogicalName="Shasha.Strings.ar.json" />
+    <None Remove="Strings\extra.*.json" />
+    <Resource Include="Assets\logo.png" />
+    <Resource Include="Assets\shasha.ico" />
+  </ItemGroup>
+
+</Project>

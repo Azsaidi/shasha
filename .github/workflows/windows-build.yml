@@ -1,0 +1,54 @@
+name: Build Windows app
+
+on:
+  push:
+    branches: [main]
+    paths: ["windows/**", ".github/workflows/windows-build.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Version
+        shell: pwsh
+        run: echo "VERSION=1.0.${{ github.run_number }}" >> $env:GITHUB_ENV
+
+      - name: Build and publish
+        shell: pwsh
+        run: |
+          dotnet publish windows/Shasha/Shasha.csproj -c Release -o out `
+            -p:Version=$env:VERSION -p:DebugType=none -p:GenerateDocumentationFile=false `
+            -warnaserror- 2>&1 | Tee-Object build.log
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "---- errors ----"
+            Select-String -Path build.log -Pattern "error" | Select-Object -Unique -First 80 | ForEach-Object { $_.Line }
+            exit 1
+          }
+
+      - name: Installer and portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DAppVersion=$env:VERSION" "/DSourceDir=$pwd\out" "/DOutDir=$pwd\dist" windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Compress-Archive -Path out\* -DestinationPath "dist\Shasha-$env:VERSION-portable.zip"
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $notes = "Shasha for Windows $env:VERSION`n`nInstall: download Shasha-Setup-$env:VERSION.exe and run it (no admin needed). Updates keep your playlists, favourites, history and downloads.`nPortable: unzip Shasha-$env:VERSION-portable.zip anywhere and run Shasha.exe."
+          gh release create "win-v$env:VERSION" dist\* --title "Shasha for Windows $env:VERSION" --notes "$notes" --latest=false

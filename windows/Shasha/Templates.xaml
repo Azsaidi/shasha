@@ -1,0 +1,178 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:ui="clr-namespace:Shasha.UI">
+
+    <!-- Film / series poster -->
+    <DataTemplate x:Key="PosterTemplate">
+        <Button Style="{StaticResource CardButton}" Width="150" Margin="0,0,14,18" Tag="open">
+            <StackPanel>
+                <Border CornerRadius="10" Background="{StaticResource Card}" Height="225" ClipToBounds="True">
+                    <Grid>
+                        <TextBlock Text="&#xE8B2;" Style="{StaticResource Icon}" FontSize="28" Foreground="#40FFFFFF" />
+                        <Image ui:Remote.Url="{Binding Image}" ui:Remote.DecodeWidth="300" Stretch="UniformToFill" />
+                        <ProgressBar Value="{Binding Progress, Mode=OneWay}" Maximum="1" VerticalAlignment="Bottom" Margin="8" Visibility="{Binding ProgressVisible}" />
+                        <Border Background="{StaticResource Accent}" CornerRadius="8" Padding="6,2" Margin="6" HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="{Binding BadgeVisible}">
+                            <TextBlock Text="{Binding Badge}" Foreground="#0B1320" FontSize="11" FontWeight="Bold" />
+                        </Border>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6">
+                            <Border Background="#99000000" CornerRadius="12" Width="24" Height="24" Margin="2,0,0,0" Visibility="{Binding DownloadedVisible}">
+                                <TextBlock Text="&#xE896;" Style="{StaticResource Icon}" FontSize="12" Foreground="White" />
+                            </Border>
+                            <Border Background="#99000000" CornerRadius="12" Width="24" Height="24" Margin="2,0,0,0" Visibility="{Binding FavouriteVisible}">
+                                <TextBlock Text="&#xE735;" Style="{StaticResource Icon}" FontSize="12" Foreground="{StaticResource Gold}" />
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold" Margin="2,8,2,0" TextWrapping="Wrap" MaxHeight="36" Height="36" />
+                <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Caption}" Margin="2,2,2,0" Height="16" />
+            </StackPanel>
+        </Button>
+    </DataTemplate>
+
+    <!-- A row of posters (for the virtualised grid) -->
+    <DataTemplate x:Key="PosterRowTemplate">
+        <ItemsControl ItemsSource="{Binding Cells}" ItemTemplate="{StaticResource PosterTemplate}" Focusable="False">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <StackPanel Orientation="Horizontal" />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+        </ItemsControl>
+    </DataTemplate>
+
+    <!-- Landscape card for Continue watching -->
+    <DataTemplate x:Key="WideTemplate">
+        <Button Style="{StaticResource CardButton}" Width="260" Margin="0,0,14,6" Tag="open">
+            <StackPanel>
+                <Border CornerRadius="10" Background="{StaticResource Card}" Height="146" ClipToBounds="True">
+                    <Grid>
+                        <TextBlock Text="&#xE768;" Style="{StaticResource Icon}" FontSize="28" Foreground="#40FFFFFF" />
+                        <Image ui:Remote.Url="{Binding Image}" ui:Remote.DecodeWidth="520" Stretch="UniformToFill" />
+                        <Border>
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0.4" EndPoint="0,1">
+                                    <GradientStop Color="#00000000" Offset="0" />
+                                    <GradientStop Color="#AA000000" Offset="1" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                        <ProgressBar Value="{Binding Progress, Mode=OneWay}" Maximum="1" VerticalAlignment="Bottom" Margin="10" Visibility="{Binding ProgressVisible}" />
+                        <Border Background="{StaticResource Accent}" CornerRadius="8" Padding="6,2" Margin="8" HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="{Binding BadgeVisible}">
+                            <TextBlock Text="{Binding Badge}" Foreground="#0B1320" FontSize="11" FontWeight="Bold" />
+                        </Border>
+                    </Grid>
+                </Border>
+                <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold" Margin="2,8,2,0" />
+                <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Caption}" Margin="2,2,2,0" />
+            </StackPanel>
+        </Button>
+    </DataTemplate>
+
+    <!-- Channel logo tile (Home) -->
+    <DataTemplate x:Key="ChannelTileTemplate">
+        <Button Style="{StaticResource CardButton}" Width="170" Margin="0,0,14,6" Tag="open">
+            <StackPanel>
+                <Border CornerRadius="10" Background="{StaticResource Card}" Height="106">
+                    <Grid>
+                        <TextBlock Text="&#xE7F4;" Style="{StaticResource Icon}" FontSize="26" Foreground="#40FFFFFF" />
+                        <Image ui:Remote.Url="{Binding Image}" ui:Remote.DecodeWidth="240" Stretch="Uniform" Margin="16" />
+                        <TextBlock Text="&#xE735;" Style="{StaticResource Icon}" FontSize="12" Foreground="{StaticResource Gold}" Margin="8"
+                                   HorizontalAlignment="Right" VerticalAlignment="Top" Visibility="{Binding FavouriteVisible}" />
+                    </Grid>
+                </Border>
+                <TextBlock Text="{Binding Title}" FontSize="13" Margin="2,8,2,0" HorizontalAlignment="Center" />
+            </StackPanel>
+        </Button>
+    </DataTemplate>
+
+    <!-- Channel row (Live TV list) -->
+    <DataTemplate x:Key="ChannelRowTemplate">
+        <Border Background="{StaticResource Card}" CornerRadius="10" Margin="0,0,0,6" Height="58">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button Style="{StaticResource CardButton}" Tag="open">
+                    <StackPanel Orientation="Horizontal" Margin="8,0">
+                        <Border Width="74" Height="44" CornerRadius="6" Background="{StaticResource CardHigh}" VerticalAlignment="Center">
+                            <Grid>
+                                <TextBlock Text="&#xE7F4;" Style="{StaticResource Icon}" Foreground="#40FFFFFF" />
+                                <Image ui:Remote.Url="{Binding Image}" ui:Remote.DecodeWidth="160" Stretch="Uniform" Margin="6" />
+                            </Grid>
+                        </Border>
+                        <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="Medium" Margin="14,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button Grid.Column="1" Style="{StaticResource IconButton}" Tag="star" Content="{Binding StarGlyph}" Margin="0,0,8,0" Foreground="{StaticResource Gold}" />
+            </Grid>
+        </Border>
+    </DataTemplate>
+
+    <!-- Episode row -->
+    <DataTemplate x:Key="EpisodeTemplate">
+        <Border Background="#99152236" CornerRadius="12" Margin="0,0,0,8" Padding="8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button Style="{StaticResource CardButton}" Tag="open">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="160" Height="90" CornerRadius="8" Background="{StaticResource Card}" ClipToBounds="True" VerticalAlignment="Top">
+                            <Grid>
+                                <TextBlock Text="&#xE768;" Style="{StaticResource Icon}" FontSize="22" Foreground="#40FFFFFF" />
+                                <Image ui:Remote.Url="{Binding Image}" ui:Remote.DecodeWidth="320" Stretch="UniformToFill" />
+                                <ProgressBar Value="{Binding Progress, Mode=OneWay}" Maximum="1" VerticalAlignment="Bottom" Margin="6" Visibility="{Binding ProgressVisible}" />
+                                <Border Background="#99000000" CornerRadius="14" Width="28" Height="28">
+                                    <TextBlock Text="&#xE768;" Style="{StaticResource Icon}" FontSize="12" Foreground="White" />
+                                </Border>
+                            </Grid>
+                        </Border>
+                        <StackPanel Grid.Column="1" Margin="14,2,0,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE930;" Style="{StaticResource Icon}" FontSize="14" Foreground="{StaticResource Success}" Margin="0,0,6,0" Visibility="{Binding WatchedVisible}" />
+                                <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding Details}" Style="{StaticResource Caption}" TextWrapping="Wrap" MaxHeight="34" Margin="0,4,0,0" />
+                            <TextBlock Text="{Binding DownloadText}" FontSize="11" Foreground="{Binding DownloadBrush}" Margin="0,4,0,0" Visibility="{Binding DownloadTextVisible}" />
+                        </StackPanel>
+                    </Grid>
+                </Button>
+                <Button Grid.Column="1" Style="{StaticResource IconButton}" Tag="download" Content="{Binding DownloadGlyph}" Foreground="{Binding DownloadBrush}" FontSize="18" VerticalAlignment="Center" Margin="8,0,4,0" />
+            </Grid>
+        </Border>
+    </DataTemplate>
+
+    <!-- Download row -->
+    <DataTemplate x:Key="DownloadTemplate">
+        <Border Background="{StaticResource Card}" CornerRadius="10" Margin="0,0,0,8" Padding="10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Border Width="{Binding ImageWidth}" Height="72" CornerRadius="6" Background="{StaticResource CardHigh}" ClipToBounds="True">
+                    <Image ui:Remote.Url="{Binding Image}" ui:Remote.DecodeWidth="200" Stretch="UniformToFill" />
+                </Border>
+                <StackPanel Grid.Column="1" Margin="14,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Status}" FontSize="12" Foreground="{Binding StatusBrush}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                    <ProgressBar Value="{Binding Fraction, Mode=OneWay}" Maximum="1" IsIndeterminate="{Binding Indeterminate}" Margin="0,8,0,0" Visibility="{Binding BarVisible}" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Style="{StaticResource IconButton}" Tag="play" Content="&#xE768;" Visibility="{Binding PlayVisible}" />
+                    <Button Style="{StaticResource IconButton}" Tag="retry" Content="&#xE72C;" Visibility="{Binding RetryVisible}" />
+                    <Button Style="{StaticResource IconButton}" Tag="delete" Content="&#xE74D;" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </DataTemplate>
+
+</ResourceDictionary>
