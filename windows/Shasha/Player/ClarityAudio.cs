@@ -25,6 +25,8 @@ public sealed class ClarityDsp
            _topCutL = Biquad.HighPass(48000, 80), _topCutR = Biquad.HighPass(48000, 80);
     float _envelope, _noiseFloor = 1, _attack, _release, _floorRise, _limiterRelease;
     float _mix, _midGain = 1, _sideGain = 1, _outGain = 1, _gain = 1;
+    Biquad _hiDetect = Biquad.HighPass(48000, 3000);
+    float _hiEnv, _fullEnv, _tameAttack, _tameRelease;
 
     public void Reset() => _level = -1;
 
@@ -37,12 +39,11 @@ public sealed class ClarityDsp
         {
             var l = _lowCutL.Run(samples[i]);
             var r = _lowCutR.Run(samples[i + 1]);
-            var mid = (l + r) * 0.5f;
             var side = (l - r) * 0.5f * _sideGain;
-            mid = _mud.Run(mid);
-            mid = _presence.Run(mid);
+            var baseMid = _mud.Run((l + r) * 0.5f);
+            var lifted = _presence.Run(baseMid);
             // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
-            var upper = _exciteIn.Run(mid);
+            var upper = _exciteIn.Run(lifted);
             var a = MathF.Abs(upper);
             var k = a > _envelope ? _attack : _release;
             var env = MathF.Max(k * _envelope + (1 - k) * a, 1e-6f);
@@ -51,8 +52,16 @@ public sealed class ClarityDsp
             var harmonics = _exciteOut2.Run(_exciteOut.Run(upper * upper / env));
             // Only while the sound stands clearly above the background noise (about 10 dB).
             var threshold = MathF.Max(3 * _noiseFloor, 3e-4f);
-            mid += harmonics * _mix * (env * env / (env * env + threshold * threshold));
-            mid = _treble.Run(mid) * _midGain;
+            var bright = _treble.Run(lifted + harmonics * _mix * (env * env / (env * env + threshold * threshold)));
+            // Already high-pitched sound (whistles, "s" sounds, strings) gets much less of the lift:
+            // that's what made high notes piercing. Dull dialogue still gets all of it.
+            var hi = MathF.Abs(_hiDetect.Run(baseMid));
+            _hiEnv = (hi > _hiEnv ? _tameAttack : _tameRelease) * (_hiEnv - hi) + hi;
+            var full = MathF.Abs(baseMid);
+            _fullEnv = (full > _fullEnv ? _tameAttack : _tameRelease) * (_fullEnv - full) + full;
+            var ratio = _hiEnv / MathF.Max(_fullEnv, 1e-6f);
+            var tame = Math.Clamp(1.25f / (1 + (ratio / 0.4f) * (ratio / 0.4f)), 0.15f, 1f);
+            var mid = (baseMid + (bright - baseMid) * tame) * _midGain;
             var outL = _topCutL.Run(mid + side) * _outGain;
             var outR = _topCutR.Run(mid - side) * _outGain;
             // Smooth limiter: drop the gain at once on a peak, bring it back over ~150 ms.
@@ -86,6 +95,11 @@ public sealed class ClarityDsp
         _release = (float)Math.Exp(-1 / (0.06 * rate));
         _floorRise = (float)(1 / (4 * rate));
         _limiterRelease = (float)(1 - Math.Exp(-1 / (0.15 * rate)));
+        _hiDetect = Biquad.HighPass(rate, 3000);
+        _hiEnv = 0;
+        _fullEnv = 0;
+        _tameAttack = (float)Math.Exp(-1 / (0.005 * rate));
+        _tameRelease = (float)Math.Exp(-1 / (0.08 * rate));
         _mix = strong ? 0.9f : 0.5f;
         _midGain = strong ? 1.25f : 1.12f;
         _sideGain = strong ? 0.85f : 1f;

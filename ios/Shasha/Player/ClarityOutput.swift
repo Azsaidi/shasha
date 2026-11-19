@@ -21,6 +21,8 @@ final class ClarityDSP {
     private var attack: Float = 0, release: Float = 0, floorRise: Float = 0, limiterRelease: Float = 0
     private var mix: Float = 0, midGain: Float = 1, sideGain: Float = 1, outGain: Float = 1
     private var gain: Float = 1
+    private var hiDetect = Biquad.highPass(48000, 3000)
+    private var hiEnv: Float = 0, fullEnv: Float = 0, tameAttack: Float = 0, tameRelease: Float = 0
 
     func reset() { level = -1 }
 
@@ -31,12 +33,11 @@ final class ClarityDSP {
         for f in 0..<frames {
             let l = lowCutL.run(samples[f * 2])
             let r = lowCutR.run(samples[f * 2 + 1])
-            var mid = (l + r) * 0.5
             let side = (l - r) * 0.5 * sideGain
-            mid = mud.run(mid)
-            mid = presence.run(mid)
+            let base = mud.run((l + r) * 0.5)
+            let lifted = presence.run(base)
             // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
-            let upper = exciteIn.run(mid)
+            let upper = exciteIn.run(lifted)
             let a = abs(upper)
             let k = a > envelope ? attack : release
             let env = max(k * envelope + (1 - k) * a, 1e-6)
@@ -45,8 +46,16 @@ final class ClarityDSP {
             let harmonics = exciteOut2.run(exciteOut.run(upper * upper / env))
             // Only while the sound stands clearly above the background noise (about 10 dB).
             let threshold = max(3 * noiseFloor, 3e-4)
-            mid += harmonics * mix * (env * env / (env * env + threshold * threshold))
-            mid = treble.run(mid) * midGain
+            let bright = treble.run(lifted + harmonics * mix * (env * env / (env * env + threshold * threshold)))
+            // Already high-pitched sound (whistles, "s" sounds, strings) gets much less of the lift:
+            // that's what made high notes piercing. Dull dialogue still gets all of it.
+            let hi = abs(hiDetect.run(base))
+            hiEnv = (hi > hiEnv ? tameAttack : tameRelease) * (hiEnv - hi) + hi
+            let full = abs(base)
+            fullEnv = (full > fullEnv ? tameAttack : tameRelease) * (fullEnv - full) + full
+            let ratio = hiEnv / max(fullEnv, 1e-6)
+            let tame = max(0.15, min(1, 1.25 / (1 + (ratio / 0.4) * (ratio / 0.4))))
+            let mid = (base + (bright - base) * tame) * midGain
             var outL = topCutL.run(mid + side) * outGain
             var outR = topCutR.run(mid - side) * outGain
             // Smooth limiter: drop the gain at once on a peak, bring it back over ~150 ms.
@@ -81,6 +90,11 @@ final class ClarityDSP {
         release = Float(exp(-1 / (0.06 * rate)))
         floorRise = Float(1 / (4 * rate))
         limiterRelease = Float(1 - exp(-1 / (0.15 * rate)))
+        hiDetect = .highPass(rate, 3000)
+        hiEnv = 0
+        fullEnv = 0
+        tameAttack = Float(exp(-1 / (0.005 * rate)))
+        tameRelease = Float(exp(-1 / (0.08 * rate)))
         mix = strong ? 0.9 : 0.5
         midGain = strong ? 1.25 : 1.12
         sideGain = strong ? 0.85 : 1
