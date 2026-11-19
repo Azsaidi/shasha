@@ -93,8 +93,8 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var resizeView: TextView
     private lateinit var sleepView: TextView
     private lateinit var clarityView: TextView
-    /** Equalizer on the player's sound, for titles whose audio is dull ("Clearer sound"). */
-    private var equalizer: android.media.audiofx.Equalizer? = null
+    /** Rebuilds the top end of dull, muffled soundtracks ("Clearer sound"). */
+    private var clarity: ClarityProcessor? = null
     private lateinit var curtain: View
     private lateinit var skipBack: TextView
     private lateinit var skipForward: TextView
@@ -661,32 +661,10 @@ class PlayerActivity : ComponentActivity() {
         applyClarity(Store.clarity(clarityKey(item)))
     }
 
-    /**
-     * Less bass, more presence and treble: brings back the detail in dull, muffled soundtracks.
-     * Gains are in millibels (100 = 1 dB), set per band by its centre frequency.
-     */
+    /** Turns "Clearer sound" up or down; it takes effect straight away. */
     private fun applyClarity(level: Int) {
         if (::clarityView.isInitialized) clarityView.text = clarityLabel(level)
-        val eq = equalizer ?: return
-        runCatching {
-            if (level == 0) {
-                eq.enabled = false
-                return
-            }
-            val range = eq.bandLevelRange
-            for (band in 0 until eq.numberOfBands) {
-                val hz = eq.getCenterFreq(band.toShort()) / 1000
-                val gain = when {
-                    hz < 120 -> if (level == 1) -300 else -600
-                    hz < 400 -> if (level == 1) -100 else -300
-                    hz < 1500 -> if (level == 1) 200 else 300
-                    hz < 5000 -> if (level == 1) 600 else 1000
-                    else -> if (level == 1) 700 else 1200
-                }
-                eq.setBandLevel(band.toShort(), gain.coerceIn(range[0].toInt(), range[1].toInt()).toShort())
-            }
-            eq.enabled = true
-        }
+        clarity?.level = level
     }
 
     private fun cycleSleepTimer() {
@@ -863,7 +841,20 @@ class PlayerActivity : ComponentActivity() {
             .setReadTimeoutMs(30_000)
         val mediaSourceFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(this, httpFactory))
 
-        val exo = ExoPlayer.Builder(this)
+        val clarityProcessor = ClarityProcessor()
+        clarity = clarityProcessor
+        val renderers = object : androidx.media3.exoplayer.DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
+            ): androidx.media3.exoplayer.audio.AudioSink =
+                androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .setAudioProcessors(arrayOf(clarityProcessor))
+                    .build()
+        }.setEnableDecoderFallback(true)
+        val exo = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(mediaSourceFactory)
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
@@ -875,13 +866,6 @@ class PlayerActivity : ComponentActivity() {
                 .build(),
             true,
         )
-        // Our own audio session, so the "Clearer sound" equalizer can attach to it.
-        equalizer?.release()
-        equalizer = runCatching {
-            val session = androidx.media3.common.util.Util.generateAudioSessionIdV21(this)
-            exo.setAudioSessionId(session)
-            android.media.audiofx.Equalizer(0, session)
-        }.getOrNull()
 
         val start = items[startIndex]
         val startPosition = when {
@@ -919,8 +903,7 @@ class PlayerActivity : ComponentActivity() {
         saveCurrent()
         startIndex = p.currentMediaItemIndex.coerceIn(0, items.lastIndex)
         p.removeListener(listener)
-        equalizer?.release()
-        equalizer = null
+        clarity = null
         playbackNotification?.setPlayer(null)
         playbackNotification = null
         mediaSession?.release()

@@ -27,6 +27,8 @@ targets:
         ENABLE_BITCODE: NO
         CODE_SIGN_STYLE: Manual
         SUPPORTS_MACCATALYST: NO
+        # Declares the few LibVLC audio functions "Clearer sound" uses (they're inside VLCKit).
+        SWIFT_OBJC_BRIDGING_HEADER: Shasha/Player/LibVLCAudio.h
     info:
       path: Shasha/Info.plist
       properties:

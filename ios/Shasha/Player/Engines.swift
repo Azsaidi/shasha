@@ -447,6 +447,9 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
     private var pipController: VLCPictureInPictureWindowControlling?
     private var pipOn = false
     private var resignObserver: Any?
+    private var currentURL: URL?
+    /// Our own sound path for "Clearer sound" (VLC's equalizer can't bring back lost treble).
+    private var clarityOutput: ClarityOutput?
 
     var view: UIView { surface }
     var onState: ((EngineState) -> Void)?
@@ -469,6 +472,7 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         timer?.invalidate()
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
         player.stop()
+        clarityOutput?.retire()
     }
 
     private func report(_ state: EngineState) {
@@ -491,6 +495,7 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         media.addOption(":http-user-agent=\(Http.userAgent)")
         media.addOption(":network-caching=1500")
         pendingStart = start
+        currentURL = url
         player.media = media
         player.play()
         timer?.invalidate()
@@ -624,10 +629,28 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
     var supportsClarity: Bool { true }
 
     func setClarity(_ level: Int) {
+        if level > 0, clarityOutput == nil {
+            let output = ClarityOutput()
+            if output.attach(to: player) {
+                clarityOutput = output
+                // VLC picks up the new sound path when it next opens: reopen at the same spot.
+                if let url = currentURL, player.media != nil {
+                    let at = duration > 0 ? position : 0
+                    output.level = level
+                    load(url, start: at)
+                }
+            }
+        }
+        if let clarityOutput {
+            clarityOutput.level = level
+            player.equalizer = nil
+            return
+        }
         guard level > 0 else {
             player.equalizer = nil
             return
         }
+        // Fallback when our own sound path isn't available: VLC's equalizer.
         let eq = VLCAudioEqualizer()
         for band in eq.bands {
             let hz = band.frequency
