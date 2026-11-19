@@ -23,7 +23,8 @@ import kotlin.coroutines.coroutineContext
 
 /** Checks GitHub for a newer release of the app, downloads the APK and hands it to Android's installer. */
 object Updater {
-    private const val LATEST = "https://api.github.com/repos/Azsaidi/shasha/releases/latest"
+    /** Newest releases first. Windows releases live in the same repo, so pick the newest with an APK. */
+    private const val RELEASES = "https://api.github.com/repos/Azsaidi/shasha/releases?per_page=30"
 
     data class Release(val version: String, val apkUrl: String, val size: Long)
 
@@ -71,29 +72,30 @@ object Updater {
         state = try {
             val release = withContext(Dispatchers.IO) {
                 val request = Request.Builder()
-                    .url(LATEST)
+                    .url(RELEASES)
                     .header("Accept", "application/vnd.github+json")
                     .header("User-Agent", "Shasha/$currentVersion")
                     .build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) throw IllegalStateException("HTTP ${response.code}")
-                    val json = JSONObject(response.body?.string().orEmpty())
-                    val tag = json.optString("tag_name").trimStart('v', 'V')
-                    val assets = json.optJSONArray("assets")
-                    var url: String? = null
-                    var size = 0L
-                    if (assets != null) {
+                    val releases = org.json.JSONArray(response.body?.string().orEmpty())
+                    var found: Release? = null
+                    for (r in 0 until releases.length()) {
+                        val json = releases.getJSONObject(r)
+                        if (json.optBoolean("draft") || json.optBoolean("prerelease")) continue
+                        val tag = json.optString("tag_name")
+                        if (!tag.startsWith("v")) continue
+                        val assets = json.optJSONArray("assets") ?: continue
                         for (i in 0 until assets.length()) {
                             val asset = assets.getJSONObject(i)
                             if (asset.optString("name").endsWith(".apk", ignoreCase = true)) {
-                                url = asset.optString("browser_download_url")
-                                size = asset.optLong("size")
+                                found = Release(tag.trimStart('v', 'V'), asset.optString("browser_download_url"), asset.optLong("size"))
                                 break
                             }
                         }
+                        if (found != null) break
                     }
-                    if (tag.isEmpty() || url.isNullOrEmpty()) throw IllegalStateException("no APK in the latest release")
-                    Release(tag, url, size)
+                    found ?: throw IllegalStateException("no APK in the releases")
                 }
             }
             if (isNewer(release.version, currentVersion)) State.Available(release) else State.UpToDate(currentVersion)
