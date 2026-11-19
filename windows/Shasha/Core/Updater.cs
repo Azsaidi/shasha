@@ -45,6 +45,39 @@ public static class Updater
     /// <summary>The newer release, or null when this is the latest.</summary>
     public static async Task<Release?> Check()
     {
+        try { return await FromApi(); }
+        catch (Exception e)
+        {
+            // GitHub's API allows 60 checks an hour per connection, then answers 403: use the feed.
+            Shasha.Core.Trace.Write("update: api failed (" + e.Message + "), using the releases feed");
+            return await FromFeed();
+        }
+    }
+
+    /// <summary>
+    /// The public releases feed (no hourly limit): the newest "win-v" tag, and the installer's
+    /// address follows from it.
+    /// </summary>
+    static async Task<Release?> FromFeed()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://github.com/Azsaidi/shasha/releases.atom");
+        request.Headers.UserAgent.ParseAdd($"Shasha-Windows/{CurrentVersion}");
+        using var response = await Http.Client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        var xml = await response.Content.ReadAsStringAsync();
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(xml, @"releases/tag/(win-v[0-9.]+)"))
+        {
+            var tag = m.Groups[1].Value;
+            var version = tag["win-v".Length..];
+            return IsNewer(version, CurrentVersion)
+                ? new Release(version, $"https://github.com/Azsaidi/shasha/releases/download/{tag}/Shasha-Setup-{version}.exe", 0)
+                : null;
+        }
+        return null;
+    }
+
+    static async Task<Release?> FromApi()
+    {
         using var request = new HttpRequestMessage(HttpMethod.Get, Releases);
         request.Headers.TryAddWithoutValidation("Accept", "application/vnd.github+json");
         request.Headers.UserAgent.Clear();
