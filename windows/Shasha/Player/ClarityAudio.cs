@@ -250,7 +250,25 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
         public float[] Samples = Array.Empty<float>();
         public int Read;
         public int Frames => Samples.Length / 2;
+        public long End => Pts + Frames * 1_000_000L / Rate;
+        /// <summary>
+        /// Dated well away from where the piece before it ended: VLC's timeline jumped (the speed
+        /// changed). Playing on regardless would put the sound out of step; line up here instead.
+        /// </summary>
+        public bool Jump;
     }
+
+    /// <summary>
+    /// How far ahead of the speakers sound is taken (beyond the device's own buffer). VLC would
+    /// otherwise hand over its whole buffer, well over a second, already at the current speed, so
+    /// a speed change only reached the speakers after all of it had played (heard as a buzz, then
+    /// a silence while it lined up again). A real sound device makes VLC wait the same way.
+    /// </summary>
+    const long MaxAhead = 150_000;
+    /// <summary>Timeline jumps smaller than this are ordinary jitter.</summary>
+    const long JumpTolerance = 30_000;
+    long? _lastEnd;
+    volatile bool _disposed;
 
     readonly object _lock = new();
     readonly List<Chunk> _chunks = new();
@@ -326,6 +344,7 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         try { _out.Stop(); } catch { }
         _out.Dispose();
     }
@@ -333,7 +352,39 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
     void OnPlay(IntPtr data, IntPtr samples, uint count, long pts)
     {
         if (count == 0) return;
-        try { Receive(samples, count, pts); } catch { }
+        try
+        {
+            Receive(samples, count, pts);
+            WaitForRoom();
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Makes VLC wait (as a sound device does) while plenty is already waiting to be played. Never
+    /// while paused, held or closing, and never for long, so VLC's pause and jump requests (which
+    /// wait for this call to return) always go through.
+    /// </summary>
+    void WaitForRoom()
+    {
+        var giveUp = Environment.TickCount64 + 400;
+        while (!_disposed && !_held && Environment.TickCount64 < giveUp)
+        {
+            long ahead;
+            lock (_lock)
+            {
+                if (_pausedAt != null || _chunks.Count == 0) return;
+                if (_freeRun)
+                {
+                    long frames = 0;
+                    foreach (var c in _chunks) frames += c.Frames - c.Read;
+                    ahead = frames * 1_000_000L / Rate - _latency;
+                }
+                else ahead = _chunks[^1].End - (libvlc_clock() + _latency);
+            }
+            if (ahead <= MaxAhead) return;
+            Thread.Sleep(5);
+        }
     }
 
     void Receive(IntPtr samples, uint count, long pts)
@@ -362,12 +413,19 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
             var chunk = new Chunk { Pts = pts, Samples = copy };
             // A piece that arrives while paused was dated before the pause: keep it in line.
             if (_pausedAt is long paused) chunk.Pts += clock - paused;
+            if (!_freeRun && _lastEnd is long expected && Math.Abs(chunk.Pts - expected) > JumpTolerance)
+            {
+                chunk.Jump = true;
+                if (_jumps++ < 10) Core.Trace.Write($"clarity: timeline jump {(chunk.Pts - expected) / 1000} ms");
+            }
+            _lastEnd = chunk.End;
             _chunks.Add(chunk);
             if (_chunks.Count > 400) _chunks.RemoveRange(0, _chunks.Count - 400);
         }
     }
 
     int _pieces;
+    int _jumps;
 
     static float Peak(float[] samples)
     {
@@ -386,13 +444,18 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
             // Everything waiting is now due that much later.
             var shift = now - at;
             foreach (var c in _chunks) c.Pts += shift;
+            if (_lastEnd is long end) _lastEnd = end + shift;
             _pausedAt = null;
         }
     }
 
     void Flush()
     {
-        lock (_lock) _chunks.Clear();
+        lock (_lock)
+        {
+            _chunks.Clear();
+            _lastEnd = null;
+        }
         _dsp.Reset();
     }
 
@@ -465,16 +528,36 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
                 var gain = _muted ? 0 : _volume;
                 var first = written;
                 var played = 0;
+                var jumped = false;
                 var limit = fadeOut ? Math.Min(frames, written + fadeFrames) : frames;
                 while (written < limit && _chunks.Count > 0)
                 {
                     var c = _chunks[0];
+                    if (c.Jump && c.Read == 0)
+                    {
+                        // VLC's timeline jumped here (the piece before was faded out): line up with
+                        // it straight away, on the next pass, instead of drifting out of step.
+                        c.Jump = false;
+                        if (played > 0 || fadeIn == 0)
+                        {
+                            _started = false;
+                            jumped = true;
+                            break;
+                        }
+                    }
+                    // The next piece starts after a jump: fade out the end of this one.
+                    var fadeEnd = _chunks.Count > 1 && _chunks[1].Jump;
                     var take = Math.Min(limit - written, c.Frames - c.Read);
                     var src = c.Read * 2;
                     var dst = offset + written * 2;
                     for (var i = 0; i < take; i++)
                     {
                         var g = played < fadeIn ? gain * played / fadeIn : gain;
+                        if (fadeEnd)
+                        {
+                            var remaining = c.Frames - (c.Read + i);
+                            if (remaining < fadeFrames) g *= (float)remaining / fadeFrames;
+                        }
                         buffer[dst + i * 2] = c.Samples[src + i * 2] * g;
                         buffer[dst + i * 2 + 1] = c.Samples[src + i * 2 + 1] * g;
                         played++;
@@ -483,7 +566,8 @@ public sealed class ClarityAudio : ISampleProvider, IDisposable
                     written += take;
                     if (c.Read >= c.Frames) _chunks.RemoveAt(0);
                 }
-                var ranOut = written < frames && !fadeOut;
+                // After a jump the rest of this pass stays silent (cleared below).
+                var ranOut = !jumped && written < frames && !fadeOut;
                 if (ranOut) _started = false;
                 if (fadeOut || ranOut)
                 {
