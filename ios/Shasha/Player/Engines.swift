@@ -551,10 +551,16 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         if player.isPlaying { refreshVideo() }
     }
 
-    /// Restarts the video track so VLC opens a fresh decoder and picture. Without this the
-    /// picture can stay black (sound only) after another app has played video.
+    /// Brings the picture back after another app has used the video hardware (otherwise it can
+    /// stay black, sound only):
+    /// 1. A picture layer iOS stopped while we were away shows nothing until it's flushed.
+    /// 2. The video track restarts (fresh decoder and picture).
+    /// 3. A jump to where we are, so decoding starts again from the last key frame straight away,
+    ///    instead of waiting seconds for the next one with the sound already playing.
+    /// 4. If there's still no picture a few seconds later, the stream reopens at the same spot.
     private func refreshVideo() {
         needsVideoRefresh = false
+        flushStoppedLayers(surface.layer)
         let id = hiddenVideoTrack
             ?? player.videoTracks.first(where: { $0.isSelected })?.trackId
             ?? player.videoTracks.first?.trackId
@@ -562,6 +568,28 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         guard let id else { return }
         player.deselectAllVideoTracks()
         player.videoTracks.first { $0.trackId == id }?.isSelectedExclusively = true
+        if player.isSeekable, duration > 0 {
+            let at = position
+            player.time = VLCTime(int: Int32(max(at, 0) * 1000))
+        }
+        refreshToken += 1
+        let token = refreshToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, token == self.refreshToken, !self.inBackground, !self.pipOn,
+                  self.player.isPlaying, !self.player.hasVideoOut, let url = self.currentURL else { return }
+            self.load(url, start: self.duration > 0 ? self.position : 0)
+        }
+    }
+
+    private var refreshToken = 0
+
+    /// AVSampleBufferDisplayLayer (VLC's picture, used for picture-in-picture) goes into a failed
+    /// state when interrupted in the background and stays black until flushed.
+    private func flushStoppedLayers(_ layer: CALayer) {
+        if let display = layer as? AVSampleBufferDisplayLayer, display.status == .failed {
+            display.flush()
+        }
+        layer.sublayers?.forEach { flushStoppedLayers($0) }
     }
 
     private func report(_ state: EngineState) {
@@ -578,6 +606,7 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         lastPollTime = -1
         needsVideoRefresh = false
         hiddenVideoTrack = nil
+        refreshToken += 1
         report(.loading)
         guard let media = VLCMedia(url: url) else {
             report(.failed(L("err_stream_generic", "VLC")))

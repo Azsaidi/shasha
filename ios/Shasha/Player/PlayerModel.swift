@@ -10,8 +10,6 @@ final class PlayerModel: ObservableObject, Identifiable {
     static let upNextSeconds: Double = 15
     static let sleepOptions = [0, 15, 30, 60, 90, 120]
     static let speeds: [Float] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
-    /// Speed while a finger is held on the picture.
-    static let holdSpeed: Float = 2
 
     @Published private(set) var items: [PlayItem]
     @Published private(set) var index: Int
@@ -39,8 +37,6 @@ final class PlayerModel: ObservableObject, Identifiable {
     @Published private(set) var hiding = false
     /// Chosen playback speed (films and episodes); kept for the rest of this player session.
     @Published private(set) var speed: Float = 1
-    /// True while a finger is held on the picture (plays at `holdSpeed`).
-    @Published private(set) var boosting = false
 
     private let fromStart: Bool
     private var started = false
@@ -98,7 +94,6 @@ final class PlayerModel: ObservableObject, Identifiable {
 
     func prepareToClose() {
         hiding = true
-        boosting = false
         hideTask?.cancel()
         controlsVisible = false
         upNextRemaining = nil
@@ -144,7 +139,6 @@ final class PlayerModel: ObservableObject, Identifiable {
         let e = Engines.make(for: url, preferVLC: preferVLC || (level != nil && Engines.vlcAvailable))
         e.setClarity(level)
         e.gravity = gravity
-        boosting = false
         e.rate = item.isLive ? 1 : speed
         e.onState = { [weak self] s in self?.stateChanged(s) }
         e.onPipChange = { [weak self] active in self?.pipActive = active }
@@ -271,7 +265,7 @@ final class PlayerModel: ObservableObject, Identifiable {
     /// The speed the engine should play at right now.
     var playbackRate: Float {
         guard let item = current, !item.isLive else { return 1 }
-        return boosting ? PlayerModel.holdSpeed : speed
+        return speed
     }
 
     /// "1.5×", "2×" (digits as on the time bar).
@@ -285,23 +279,6 @@ final class PlayerModel: ObservableObject, Identifiable {
         Toast.shared.show(s == 1 ? L("speed_normal") : L("speed_set", PlayerModel.speedLabel(s)))
         NowPlaying.shared.update(force: true)
         showControls()
-    }
-
-    /// Finger held down on the picture: play at 2× until it's lifted.
-    func startBoost() {
-        guard canSkip, wantsPlay, errorMessage == nil, !boosting else { return }
-        boosting = true
-        hideTask?.cancel()
-        withAnimation(.easeIn(duration: 0.2)) { controlsVisible = false }
-        engine?.rate = playbackRate
-        NowPlaying.shared.update(force: true)
-    }
-
-    func endBoost() {
-        guard boosting else { return }
-        boosting = false
-        engine?.rate = playbackRate
-        NowPlaying.shared.update(force: true)
     }
 
     func seek(to seconds: Double) {
