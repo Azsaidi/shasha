@@ -42,8 +42,6 @@ protocol PlaybackEngine: AnyObject {
     var volume: Float { get set }
     var muted: Bool { get set }
     var gravity: VideoGravity { get set }
-    /// Playback speed (1 = normal). Kept while paused and applied when playing.
-    var rate: Float { get set }
     var supportsPip: Bool { get }
     /// True once picture-in-picture can actually start (the video is showing).
     var canStartPip: Bool { get }
@@ -233,8 +231,6 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
         let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": Http.userAgent]])
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 8
-        // Keeps voices at their normal pitch when sped up or slowed down.
-        item.audioTimePitchAlgorithm = .timeDomain
         itemObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -312,15 +308,6 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
             case .fill: layerView.playerLayer.videoGravity = .resizeAspectFill
             case .stretch: layerView.playerLayer.videoGravity = .resize
             }
-        }
-    }
-
-    var rate: Float = 1 {
-        didSet {
-            // play() uses defaultRate; change the running speed only while playing (setting
-            // `rate` on a paused player would start it).
-            player.defaultRate = rate
-            if player.rate > 0 { player.rate = rate }
         }
     }
 
@@ -576,7 +563,7 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
     }
 
     /// A few seconds after something that restarts VLC's picture: if it's playing with no picture,
-    /// reopen the stream at the same spot (and speed).
+    /// reopen the stream at the same spot.
     private func watchPicture() {
         refreshToken += 1
         let token = refreshToken
@@ -620,9 +607,6 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         }
         media.addOption(":http-user-agent=\(Http.userAgent)")
         media.addOption(":network-caching=1500")
-        // The speed goes in with the stream, so it never has to change while opening.
-        if rate != 1 { media.addOption(":rate=\(rate)") }
-        appliedRate = rate
         pendingStart = start
         currentURL = url
         player.media = media
@@ -703,58 +687,6 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
     }
 
     var gravity: VideoGravity = .fit { didSet { surface.gravity = gravity } }
-
-    /// The speed VLC has for this stream. Tracked here rather than read back from VLC: each change
-    /// makes VLC restart its sound and picture, and re-applying it whenever VLC's reading differed
-    /// (it can lag or round) kept restarting them, so the clock ran with no picture or sound.
-    private var appliedRate: Float = 1
-
-    var rate: Float = 1 {
-        didSet {
-            guard player.media != nil, abs(rate - appliedRate) > 0.001 else { return }
-            appliedRate = rate
-            changeRate(rate)
-        }
-    }
-
-    private var rateToken = 0
-
-    private func changeRate(_ newRate: Float) {
-        rateToken += 1
-        let token = rateToken
-        if clarityOutput != nil {
-            // Our own sound path spots the jump in VLC's timeline and lines up with it, with a
-            // short fade (see ClarityOutput).
-            player.rate = newRate
-            watchPicture()
-            return
-        }
-        // VLC restarts its sound to change speed, which clicks: fade it out, change while it's
-        // silent, then fade back in.
-        func after(_ seconds: Double, _ work: @escaping () -> Void) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
-                guard let self, token == self.rateToken else { return }
-                work()
-            }
-        }
-        for (i, level) in [Float(0.5), 0.2, 0].enumerated() {
-            after(Double(i) * 0.02) { [weak self] in self?.setRawVolume(level) }
-        }
-        after(0.07) { [weak self] in
-            self?.player.rate = newRate
-            self?.watchPicture()
-        }
-        for (i, level) in [Float(0.25), 0.5, 0.75, 1].enumerated() {
-            after(0.22 + Double(i) * 0.03) { [weak self] in self?.setRawVolume(level) }
-        }
-    }
-
-    /// VLC's volume at a fraction of the chosen one (for fades), without changing the setting.
-    private func setRawVolume(_ fraction: Float) {
-        if let audio = player.audio as VLCAudio? {
-            audio.volume = Int32((isMuted ? 0 : storedVolume) * 100 * fraction)
-        }
-    }
 
     func play() {
         if reported == .ended {

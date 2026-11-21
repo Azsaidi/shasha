@@ -316,8 +316,5 @@
  "web_expired": "Scan the QR code on your TV again.",
  "web_expired_title": "Link expired",
  "web_intro": "Enter the Xtream Codes details from your IPTV provider. Your TV will sign in as soon as you tap the button.",
- "web_title": "Sign in to Shasha",
- "speed": "Speed",
- "speed_normal": "Normal speed",
- "speed_set": "Speed {0}"
+ "web_title": "Sign in to Shasha"
 }

@@ -80,9 +80,7 @@ final class NowPlaying {
             MPMediaItemPropertyTitle: item.kind == .episode && parts.count > 1
                 ? parts.dropFirst().joined(separator: " · ") + (item.subtitle.map { " · \($0)" } ?? "")
                 : item.title,
-            // 0 while paused so the lock screen shows "play" and its clock stops.
-            MPNowPlayingInfoPropertyPlaybackRate: model.wantsPlay && model.isPlaying ? Double(model.playbackRate) : 0.0,
-            MPNowPlayingInfoPropertyDefaultPlaybackRate: Double(model.speed),
+            MPNowPlayingInfoPropertyPlaybackRate: model.wantsPlay && model.isPlaying ? 1.0 : 0.0,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
         ]
         if item.isLive {
