@@ -8,10 +8,37 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color as ComposeColor
+import com.azsaidi.shasha.player.Playback
 import androidx.compose.material3.Surface
 import com.azsaidi.shasha.data.Language
 import com.azsaidi.shasha.ui.ShashaNav
 import com.azsaidi.shasha.ui.ShashaTheme
+
+/** Spinner over the app while a series is looked up before the player opens; blocks more taps. */
+@Composable
+private fun OpeningOverlay() {
+    if (!Playback.opening.value) return
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(ComposeColor(0x73000000))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(color = ComposeColor.White)
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun attachBaseContext(newBase: Context) {
@@ -27,7 +54,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             ShashaTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
-                    ShashaNav()
+                    Box {
+                        ShashaNav()
+                        OpeningOverlay()
+                    }
                 }
             }
         }

@@ -114,6 +114,19 @@ public static class Playback
         Start(items, Math.Max(0, items.FindIndex(i => i.StreamId == d.StreamId)));
     }
 
+    /// <summary>True while a series is looked up before the player opens; more clicks are ignored.</summary>
+    static bool _opening;
+
+    /// <summary>Runs a lookup that ends in playing something, once at a time, with a message.</summary>
+    static async Task WhileOpening(Func<Task> work)
+    {
+        if (_opening) return;
+        _opening = true;
+        Toast.Show(L("loading_episodes"));
+        try { await work(); }
+        finally { _opening = false; }
+    }
+
     /// <summary>Continue a history entry. For episodes the rest of the season is queued too.</summary>
     public static async Task Resume(WatchEntry entry)
     {
@@ -122,6 +135,11 @@ public static class Playback
             case WatchKind.Live: RecentChannels(new List<WatchEntry> { entry }, 0); return;
             case WatchKind.Movie: Movie(entry.StreamId, entry.Title, entry.Image, entry.Ext); return;
         }
+        await WhileOpening(() => ResumeEpisode(entry));
+    }
+
+    static async Task ResumeEpisode(WatchEntry entry)
+    {
         SeriesInfo? info = null;
         if (entry.SeriesId != null && Session.Api != null)
         {
@@ -149,7 +167,9 @@ public static class Playback
     }
 
     /// <summary>Plays a series straight from its poster: resume, next episode, or the first one.</summary>
-    public static async Task PlaySeries(StreamItem series)
+    public static Task PlaySeries(StreamItem series) => WhileOpening(() => PlaySeriesNow(series));
+
+    static async Task PlaySeriesNow(StreamItem series)
     {
         if (Session.Api == null) return;
         try

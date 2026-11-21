@@ -227,12 +227,18 @@ private fun downloadAction(context: Context, kind: WatchKind, streamId: String, 
 private fun playSeries(context: Context, item: StreamItem) {
     val api = Session.api ?: return
     menuScope.launch {
+        Playback.whileOpening { playSeriesNow(context, api, item) }
+    }
+}
+
+private suspend fun playSeriesNow(context: Context, api: com.azsaidi.shasha.data.XtreamApi, item: StreamItem) {
+    run {
         val info = runCatching { api.seriesInfo(item.id) }.getOrNull()
         if (info == null) {
             Toast.makeText(context, context.getString(R.string.couldnt_load_series), Toast.LENGTH_SHORT).show()
-            return@launch
+            return
         }
-        val action = seriesAction(context, info, Session.latestEpisode(item.id)) ?: return@launch
+        val action = seriesAction(context, info, Session.latestEpisode(item.id)) ?: return
         Playback.episodes(
             context,
             item.id,

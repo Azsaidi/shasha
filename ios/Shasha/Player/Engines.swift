@@ -572,6 +572,12 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
             let at = position
             player.time = VLCTime(int: Int32(max(at, 0) * 1000))
         }
+        watchPicture()
+    }
+
+    /// A few seconds after something that restarts VLC's picture: if it's playing with no picture,
+    /// reopen the stream at the same spot (and speed).
+    private func watchPicture() {
         refreshToken += 1
         let token = refreshToken
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
@@ -614,6 +620,9 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         }
         media.addOption(":http-user-agent=\(Http.userAgent)")
         media.addOption(":network-caching=1500")
+        // The speed goes in with the stream, so it never has to change while opening.
+        if rate != 1 { media.addOption(":rate=\(rate)") }
+        appliedRate = rate
         pendingStart = start
         currentURL = url
         player.media = media
@@ -630,8 +639,6 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
             lastPollTime = -1
         }
         // VLC can stay in "buffering" while it plays; moving time means it's playing.
-        // A new stream can start at normal speed: keep the chosen one.
-        if player.isPlaying, abs(player.rate - rate) > 0.01 { player.rate = rate }
         let now = position
         defer { lastPollTime = now }
         if player.isPlaying, lastPollTime >= 0, now > lastPollTime {
@@ -697,7 +704,19 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
 
     var gravity: VideoGravity = .fit { didSet { surface.gravity = gravity } }
 
-    var rate: Float = 1 { didSet { player.rate = rate } }
+    /// The speed VLC has for this stream. Tracked here rather than read back from VLC: each change
+    /// makes VLC restart its sound and picture, and re-applying it whenever VLC's reading differed
+    /// (it can lag or round) kept restarting them, so the clock ran with no picture or sound.
+    private var appliedRate: Float = 1
+
+    var rate: Float = 1 {
+        didSet {
+            guard player.media != nil, abs(rate - appliedRate) > 0.001 else { return }
+            appliedRate = rate
+            player.rate = rate
+            watchPicture()
+        }
+    }
 
     func play() {
         if reported == .ended {

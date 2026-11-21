@@ -22,6 +22,7 @@ import android.util.Rational
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -102,6 +103,10 @@ class PlayerActivity : ComponentActivity() {
     private var skipSide = 0
     private var skipTotal = 0
     private var lastSkipAt = 0L
+    /** "2× ▶▶" shown while a finger is held on the picture. */
+    private lateinit var boostBadge: TextView
+    private var boosting = false
+    private var speedBeforeBoost = 1f
     // Recent touches on the picture, to tell a double-tap that strays onto the previous/next
     // button from a real press of it.
     private var lastTouchAt = 0L
@@ -537,6 +542,25 @@ class PlayerActivity : ComponentActivity() {
                 setMargins(dp(24), dp(24), dp(24), dp(96))
             },
         )
+        boostBadge = TextView(this).apply {
+            text = "${formatSpeed(HOLD_SPEED)}  ▶▶"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            textDirection = View.TEXT_DIRECTION_LTR
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(0x8C000000.toInt())
+            }
+            visibility = View.GONE
+        }
+        root.addView(
+            boostBadge,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = dp(28)
+            },
+        )
         root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         setContentView(root)
     }
@@ -558,7 +582,7 @@ class PlayerActivity : ComponentActivity() {
 
     /**
      * Phones: double-tap the left third to go back 10 s, the right third to go forward. Repeated taps
-     * add up (once skipping, single taps on that side keep going).
+     * add up (once skipping, single taps on that side keep going). Press and hold: 2× until let go.
      */
     @android.annotation.SuppressLint("ClickableViewAccessibility")
     private fun setUpDoubleTap() {
@@ -584,9 +608,16 @@ class PlayerActivity : ComponentActivity() {
                 }
                 return true
             }
+
+            override fun onLongPress(e: MotionEvent) {
+                startBoost()
+            }
         })
         playerView.setOnTouchListener { _, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN) touchedDown(event.x)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> touchedDown(event.x)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> endBoost()
+            }
             detector.onTouchEvent(event)
         }
     }
@@ -656,6 +687,27 @@ class PlayerActivity : ComponentActivity() {
         override fun seekToNextMediaItem() = zapFromButton(1, exo) { exo.seekToNextMediaItem() }
     }
 
+    /** Finger held on the picture: 2× until it's lifted (films and episodes, while playing). */
+    private fun startBoost() {
+        val p = player ?: return
+        if (boosting || inPip || !isVod() || !p.isPlaying) return
+        boosting = true
+        speedBeforeBoost = p.playbackParameters.speed
+        p.setPlaybackSpeed(HOLD_SPEED)
+        playerView.hideController()
+        boostBadge.visibility = View.VISIBLE
+        playerView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    }
+
+    private fun endBoost() {
+        if (!boosting) return
+        boosting = false
+        player?.setPlaybackSpeed(speedBeforeBoost)
+        boostBadge.visibility = View.GONE
+    }
+
+    private fun formatSpeed(speed: Float): String =
+        (if (speed % 1f == 0f) speed.toInt().toString() else speed.toString()) + "×"
 
     private fun skipBy(side: Int) {
         val p = player ?: return
@@ -1080,6 +1132,7 @@ class PlayerActivity : ComponentActivity() {
 
     private fun releasePlayer() {
         val p = player ?: return
+        endBoost()
         pendingZap?.let { handler.removeCallbacks(it) }
         pendingZap = null
         track()
@@ -1348,6 +1401,8 @@ class PlayerActivity : ComponentActivity() {
         const val CMD_NEXT = "next"
         const val CMD_PREVIOUS = "previous"
         const val UP_NEXT_MS = 15_000L
+        /** Speed while a finger is held on the picture. */
+        const val HOLD_SPEED = 2f
         private const val PLAYBACK_NOTIFICATION_ID = 4202
         private const val PLAYBACK_CHANNEL_ID = "playback"
     }

@@ -4,6 +4,7 @@ struct RootView: View {
     @ObservedObject private var session = Session.shared
     @ObservedObject private var presenter = PlayerPresenter.shared
     @ObservedObject private var nav = AppNav.shared
+    @ObservedObject private var opening = Opening.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -18,6 +19,17 @@ struct RootView: View {
                     )) {
                         MultiViewScreen()
                     }
+            }
+            if opening.busy {
+                // Looking up the series before the player opens: show it's working, block more taps.
+                ZStack {
+                    Color.black.opacity(0.45).ignoresSafeArea()
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                        .scaleEffect(1.5)
+                }
+                .transition(.opacity)
             }
             ToastOverlay()
         }

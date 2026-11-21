@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import com.azsaidi.shasha.R
 import com.azsaidi.shasha.data.DownloadItem
 import com.azsaidi.shasha.data.DownloadState
@@ -70,6 +71,22 @@ object MultiView {
 
 /** Builds play queues for each kind of content and starts the player. */
 object Playback {
+    /**
+     * True while a series is looked up before the player opens (Continue watching, series posters):
+     * a spinner shows over the app and more taps are ignored, so a second tap can't start it twice.
+     */
+    val opening = mutableStateOf(false)
+
+    suspend fun whileOpening(work: suspend () -> Unit) {
+        if (opening.value) return
+        opening.value = true
+        try {
+            work()
+        } finally {
+            opening.value = false
+        }
+    }
+
 
     private fun start(context: Context, items: List<PlayItem>, index: Int, fromStart: Boolean = false) {
         if (items.isEmpty()) return
@@ -196,7 +213,7 @@ object Playback {
     }
 
     /** Continue a history entry with one tap. For episodes the rest of the season is queued too. */
-    suspend fun resume(context: Context, entry: WatchEntry) {
+    suspend fun resume(context: Context, entry: WatchEntry) = whileOpening {
         when (entry.kind) {
             WatchKind.LIVE -> recentChannels(context, listOf(entry), 0)
             WatchKind.MOVIE -> movie(context, entry.streamId, entry.title, entry.image, entry.extension)
@@ -211,7 +228,7 @@ object Playback {
                     episodes(context, seriesId, entry.seriesName ?: info?.name ?: entry.title, info?.cover ?: entry.image, season, index)
                 } else {
                     // Offline or the provider didn't answer: play just this one (from the download if there is one).
-                    val item = entryItem(entry) ?: return
+                    val item = entryItem(entry) ?: return@whileOpening
                     start(context, listOf(item), 0)
                 }
             }

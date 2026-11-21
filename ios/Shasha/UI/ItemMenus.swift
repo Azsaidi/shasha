@@ -48,7 +48,7 @@ enum Actions {
     /// Plays a series straight from its poster.
     static func playSeries(_ item: StreamItem) {
         guard let api = Session.shared.api else { return }
-        Task {
+        Opening.shared.run {
             guard let info = try? await api.seriesInfo(item.id),
                   let action = seriesAction(info, latest: Session.shared.latestEpisode(item.id)) else {
                 Toast.shared.show(L("couldnt_load_series"))
@@ -70,7 +70,7 @@ enum Actions {
     }
 
     static func play(_ entry: WatchEntry) {
-        Task { await Playback.resume(entry) }
+        Opening.shared.run { await Playback.resume(entry) }
     }
 }
 

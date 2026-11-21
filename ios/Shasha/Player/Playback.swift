@@ -37,6 +37,23 @@ final class Toast: ObservableObject {
     }
 }
 
+/// While a series is looked up before playing (Continue watching, a series poster): shows a
+/// spinner over the app and ignores more taps, so a second tap can't open a second player.
+@MainActor
+final class Opening: ObservableObject {
+    static let shared = Opening()
+    @Published private(set) var busy = false
+
+    func run(_ work: @escaping @MainActor () async -> Void) {
+        guard !busy else { return }
+        busy = true
+        Task { @MainActor in
+            await work()
+            busy = false
+        }
+    }
+}
+
 /// Opens the full-screen player and split screen from anywhere in the app.
 ///
 /// On iPhone the player is landscape and the app portrait. To avoid the app flashing sideways,
@@ -50,6 +67,7 @@ final class PlayerPresenter: ObservableObject {
     @Published private(set) var multiHiding = false
     /// The last list played, offered as "Same list" when adding to split screen.
     private(set) var lastQueue: [PlayItem] = []
+    private var lastPresented: (key: String, at: Date)?
 
     private func withoutAnimation(_ change: () -> Void) {
         var t = Transaction()
@@ -76,6 +94,10 @@ final class PlayerPresenter: ObservableObject {
 
     func present(_ items: [PlayItem], index: Int, fromStart: Bool = false) {
         guard !items.isEmpty else { return }
+        // The same thing asked for twice in quick succession (a double tap): open it once.
+        let key = items[min(max(index, 0), items.count - 1)].key
+        if let last = lastPresented, last.key == key, Date().timeIntervalSince(last.at) < 2 { return }
+        lastPresented = (key, Date())
         lastQueue = items
         let model = PlayerModel(items: items, index: min(max(index, 0), items.count - 1), fromStart: fromStart)
         if multiView {
@@ -93,6 +115,7 @@ final class PlayerPresenter: ObservableObject {
 
     func dismissPlayer() {
         guard let model = player, !model.hiding else { return }
+        lastPresented = nil
         // Keep the (paused) picture on screen while it turns upright, so there's no black flash
         // and the app never shows sideways.
         model.prepareToClose()

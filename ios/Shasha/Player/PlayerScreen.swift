@@ -38,12 +38,13 @@ struct AirPlayButton: UIViewRepresentable {
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }
 
-/// Taps and double-taps on the picture (UIKit recognisers); positions are reported as 0…1
-/// across the screen.
+/// Taps, double-taps and press-and-hold on the picture. UIKit recognisers so a hold doesn't
+/// fight the taps; positions are reported as 0…1 across the screen.
 struct TouchSurface: UIViewRepresentable {
     var onTouchDown: (CGFloat) -> Void
     var onTap: (CGFloat) -> Void
     var onDoubleTap: (CGFloat) -> Void
+    var onHold: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -56,8 +57,11 @@ struct TouchSurface: UIViewRepresentable {
         double.numberOfTapsRequired = 2
         let single = UITapGestureRecognizer(target: c, action: #selector(Coordinator.tapped(_:)))
         single.require(toFail: double)
+        let hold = UILongPressGestureRecognizer(target: c, action: #selector(Coordinator.held(_:)))
+        hold.minimumPressDuration = 0.4
         v.addGestureRecognizer(double)
         v.addGestureRecognizer(single)
+        v.addGestureRecognizer(hold)
         return v
     }
 
@@ -86,6 +90,14 @@ struct TouchSurface: UIViewRepresentable {
 
         @objc func tapped(_ g: UITapGestureRecognizer) { parent.onTap(x(g)) }
         @objc func doubleTapped(_ g: UITapGestureRecognizer) { parent.onDoubleTap(x(g)) }
+
+        @objc func held(_ g: UILongPressGestureRecognizer) {
+            switch g.state {
+            case .began: parent.onHold(true)
+            case .ended, .cancelled, .failed: parent.onHold(false)
+            default: break
+            }
+        }
     }
 }
 
@@ -162,6 +174,14 @@ struct PlayerScreen: View {
                     .allowsHitTesting(skipSide == 0)
             }
 
+            if model.boosting {
+                boostBadge
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 28)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+
             if !model.hiding, let message = model.errorMessage {
                 errorCard(message)
             }
@@ -202,14 +222,15 @@ struct PlayerScreen: View {
     // MARK: Gestures
 
     /// Left third: double-tap back 10 s. Right third: forward 10 s. Single tap shows/hides controls.
-    /// Always left = back, like the time bar, in Arabic too.
+    /// Press and hold: 2× speed until let go. Always left = back, like the time bar, in Arabic too.
     private var gestureLayer: some View {
         GeometryReader { geo in
             ZStack {
                 TouchSurface(
                     onTouchDown: { x in touchedDown(x) },
                     onTap: { x in tapped(x) },
-                    onDoubleTap: { x in doubleTapped(x) }
+                    onDoubleTap: { x in doubleTapped(x) },
+                    onHold: { on in held(on) }
                 )
                 if skipSide != 0 {
                     SkipFeedback(forward: skipSide > 0, seconds: skipSeconds, size: geo.size)
@@ -257,6 +278,15 @@ struct PlayerScreen: View {
             model.toggleControls()
         } else {
             doubleTap(s)
+        }
+    }
+
+    private func held(_ on: Bool) {
+        if on {
+            model.startBoost()
+            if model.boosting { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+        } else {
+            model.endBoost()
         }
     }
 
@@ -512,6 +542,22 @@ struct PlayerScreen: View {
             }
             .foregroundStyle(.white)
         }
+    }
+
+    /// Shown while a finger is held on the picture.
+    private var boostBadge: some View {
+        HStack(spacing: 6) {
+            Text(PlayerModel.speedLabel(PlayerModel.holdSpeed))
+                .font(.subheadline.bold())
+                .monospacedDigit()
+            Image(systemName: "forward.fill")
+                .font(.system(size: 13, weight: .bold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.55), in: Capsule())
+        .environment(\.layoutDirection, .leftToRight)
     }
 
     // MARK: Cards
