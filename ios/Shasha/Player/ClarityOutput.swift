@@ -228,6 +228,9 @@ final class ClarityOutput {
         var started = false
         /// How far the pieces are from when they're due, smoothed (µs).
         var drift: Double = 0
+        /// What was playing when VLC dropped everything (a speed change, a jump), already faded
+        /// to silence: played out first so the sound doesn't stop mid-wave with a click.
+        var tail: [Float] = []
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -412,7 +415,25 @@ final class ClarityOutput {
     }
 
     private func flush() {
-        state.withLockUnchecked { $0.chunks.removeAll() }
+        state.withLockUnchecked { s in
+            // Keep a few milliseconds of what was about to play, faded out.
+            var tail: [Float] = []
+            if s.pausedAt == nil, s.started, let head = s.chunks.first {
+                let n = min(256, head.frames - head.read)
+                if n > 0 {
+                    tail.reserveCapacity(n * 2)
+                    for k in 0..<n {
+                        let g = Float(n - k) / Float(n)
+                        let i = (head.read + k) * 2
+                        tail.append(head.samples[i] * g)
+                        tail.append(head.samples[i + 1] * g)
+                    }
+                }
+            }
+            s.tail = tail
+            s.chunks.removeAll()
+            s.started = false
+        }
         dsp.reset()
     }
 
@@ -440,6 +461,18 @@ final class ClarityOutput {
         return state.withLockUnchecked { s in
             var written = 0
             defer { for f in written..<frames { left[f] = 0; right[f] = 0 } }
+            if !s.tail.isEmpty {
+                // Fade out what was cut off first; the new sound fades in on a later pass.
+                let n = min(frames, s.tail.count / 2)
+                let g: Float = s.muted ? 0 : s.volume
+                for f in 0..<n {
+                    left[f] = s.tail[f * 2] * g
+                    right[f] = s.tail[f * 2 + 1] * g
+                }
+                s.tail.removeFirst(n * 2)
+                written = n
+                return true
+            }
             guard s.pausedAt == nil, !s.chunks.isEmpty else {
                 s.started = false
                 return false

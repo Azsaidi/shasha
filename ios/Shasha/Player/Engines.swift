@@ -712,9 +712,52 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
     var rate: Float = 1 {
         didSet {
             guard player.media != nil, abs(rate - appliedRate) > 0.001 else { return }
+            let slower = rate < appliedRate
             appliedRate = rate
-            player.rate = rate
+            changeRate(rate, slower: slower)
+        }
+    }
+
+    private var rateToken = 0
+
+    private func changeRate(_ newRate: Float, slower: Bool) {
+        rateToken += 1
+        let token = rateToken
+        if clarityOutput != nil {
+            // Our own sound path fades itself out and in around the change (see ClarityOutput).
+            player.rate = newRate
+            // Slowing down through it can leave VLC out of step for a few seconds (black picture,
+            // no sound): a jump to the same spot lines picture and sound up again straight away.
+            if slower, player.isSeekable, duration > 0 {
+                player.time = VLCTime(int: Int32(max(position, 0) * 1000))
+            }
             watchPicture()
+            return
+        }
+        // VLC restarts its sound to change speed, which clicks: fade it out, change while it's
+        // silent, then fade back in.
+        func after(_ seconds: Double, _ work: @escaping () -> Void) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                guard let self, token == self.rateToken else { return }
+                work()
+            }
+        }
+        for (i, level) in [Float(0.5), 0.2, 0].enumerated() {
+            after(Double(i) * 0.02) { [weak self] in self?.setRawVolume(level) }
+        }
+        after(0.07) { [weak self] in
+            self?.player.rate = newRate
+            self?.watchPicture()
+        }
+        for (i, level) in [Float(0.25), 0.5, 0.75, 1].enumerated() {
+            after(0.22 + Double(i) * 0.03) { [weak self] in self?.setRawVolume(level) }
+        }
+    }
+
+    /// VLC's volume at a fraction of the chosen one (for fades), without changing the setting.
+    private func setRawVolume(_ fraction: Float) {
+        if let audio = player.audio as VLCAudio? {
+            audio.volume = Int32((isMuted ? 0 : storedVolume) * 100 * fraction)
         }
     }
 
