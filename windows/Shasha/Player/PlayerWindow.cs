@@ -54,6 +54,13 @@ public sealed class PlayerWindow : Window
     DateTime? _sleepEnd;
     static readonly int[] SleepOptions = { 0, 15, 30, 60, 90 };
     string _aspect = "fit";
+    static readonly float[] Speeds = { 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f };
+    /// <summary>Speed while the mouse button is held down on the picture.</summary>
+    const float HoldSpeed = 2f;
+    /// <summary>Chosen speed for films and episodes; kept while this window is open.</summary>
+    float _speed = 1f;
+    bool _boosting;
+    bool _pressed;
 
     // Controls
     readonly Grid _overlay = new() { Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)), Focusable = true };
@@ -63,7 +70,7 @@ public sealed class PlayerWindow : Window
     readonly Slider _slider = new() { Minimum = 0, Maximum = 1, IsMoveToPointEnabled = true, Margin = new Thickness(12, 0, 12, 0) };
     readonly TextBlock _time = new() { Foreground = Brushes.White, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
     readonly TextBlock _remaining = new() { Foreground = Brushes.White, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
-    readonly Button _playPause, _prev, _next, _back10, _fwd10, _mute, _clarityButton, _fullscreen, _mini, _sleep;
+    readonly Button _playPause, _prev, _next, _back10, _fwd10, _mute, _clarityButton, _fullscreen, _mini, _sleep, _speedButton;
     readonly Slider _volume = new() { Minimum = 0, Maximum = 100, Width = 110, VerticalAlignment = VerticalAlignment.Center };
     readonly Grid _timeRow = new();
     readonly ProgressBar _spinner = new() { IsIndeterminate = true, Width = 160, Height = 4, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
@@ -84,6 +91,8 @@ public sealed class PlayerWindow : Window
     readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(400) };
     readonly DispatcherTimer _hide = new() { Interval = TimeSpan.FromSeconds(3) };
     readonly DispatcherTimer _clickTimer = new() { Interval = TimeSpan.FromMilliseconds(260) };
+    readonly DispatcherTimer _holdTimer = new() { Interval = TimeSpan.FromMilliseconds(400) };
+    readonly Border _boostBadge;
     CancellationTokenSource? _epgCts;
 
     // Window state before full screen / mini player
@@ -143,6 +152,8 @@ public sealed class PlayerWindow : Window
         aspect.Click += (_, _) => ShowAspect(aspect);
         aspect.Content = "\uE799";
         _sleep = PlayerButton("\uE708", L("sleep"), CycleSleep);
+        _speedButton = PlayerButton("\uEC4A", $"{L("speed")}: {SpeedLabel(1f)}", () => { });
+        _speedButton.Click += (_, _) => ShowSpeed(_speedButton);
         var split = PlayerButton("\uE8A9", L("split_add"), () => SplitScreen.Add(Current));
         _mini = PlayerButton("\uE944", L("mini_player"), ToggleMini);
         _fullscreen = PlayerButton("\uE740", L("full_screen"), ToggleFullScreen);
@@ -159,7 +170,7 @@ public sealed class PlayerWindow : Window
         Grid.SetColumn(titles, 1);
         topGrid.Children.Add(titles);
         var tools = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        foreach (var b in new UIElement[] { _clarityButton, tracks, aspect, _sleep, split, _mini, _fullscreen }) tools.Children.Add(b);
+        foreach (var b in new UIElement[] { _clarityButton, _speedButton, tracks, aspect, _sleep, split, _mini, _fullscreen }) tools.Children.Add(b);
         Grid.SetColumn(tools, 2);
         topGrid.Children.Add(tools);
         _top = new Border { Child = topGrid, VerticalAlignment = VerticalAlignment.Top, Background = Fade(true) };
@@ -249,6 +260,15 @@ public sealed class PlayerWindow : Window
             Opacity = 0, IsHitTestVisible = false,
         };
 
+        // "2× ▶▶" while the mouse button is held on the picture
+        _boostBadge = new Border
+        {
+            Child = new TextBlock { Text = $"{SpeedLabel(HoldSpeed)}  \u25B6\u25B6", Foreground = Brushes.White, FontSize = 15, FontWeight = FontWeights.SemiBold },
+            Background = new SolidColorBrush(Color.FromArgb(0x8C, 0, 0, 0)), CornerRadius = new CornerRadius(18),
+            Padding = new Thickness(16, 8, 16, 8), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 28, 0, 0), Visibility = Visibility.Collapsed, IsHitTestVisible = false,
+        };
+
         // Error
         var retry = TextButton(L("try_again"), Retry);
         retry.HorizontalAlignment = HorizontalAlignment.Center;
@@ -268,12 +288,19 @@ public sealed class PlayerWindow : Window
         _toastTimer.Tick += (_, _) => { _toastTimer.Stop(); _toast.Visibility = Visibility.Collapsed; };
         Toast.Shown += OnToast;
 
-        foreach (var e in new UIElement[] { _spinner, _errorPanel, _skipBubble, _epg, _upNext, _top, _bottom, _toast }) _overlay.Children.Add(e);
+        foreach (var e in new UIElement[] { _spinner, _errorPanel, _skipBubble, _boostBadge, _epg, _upNext, _top, _bottom, _toast }) _overlay.Children.Add(e);
         _view.Content = _overlay;
         Content = _view;
 
         _overlay.MouseMove += (_, _) => ShowControls();
         _overlay.MouseLeftButtonDown += OnOverlayClick;
+        _overlay.MouseLeftButtonUp += OnOverlayRelease;
+        _overlay.LostMouseCapture += (_, _) => { _pressed = false; _holdTimer.Stop(); EndBoost(); };
+        _holdTimer.Tick += (_, _) =>
+        {
+            _holdTimer.Stop();
+            if (_pressed && Mouse.LeftButton == MouseButtonState.Pressed) StartBoost();
+        };
         _overlay.MouseWheel += (_, e) => SetVolume((int)_volume.Value + (e.Delta > 0 ? 5 : -5), save: true, show: true);
         _overlay.KeyDown += OnKey;
         PreviewKeyDown += OnKey;
@@ -399,6 +426,9 @@ public sealed class PlayerWindow : Window
         _lastDuration = 0;
         _hadPlayback = false;
         _cancelledUpNext = false;
+        _boosting = false;
+        _boostBadge.Visibility = Visibility.Collapsed;
+        _speedButton.Visibility = item.IsLive ? Visibility.Collapsed : Visibility.Visible;
         _upNext.Visibility = Visibility.Collapsed;
         _errorPanel.Visibility = Visibility.Collapsed;
         _spinner.Visibility = Visibility.Visible;
@@ -534,6 +564,7 @@ public sealed class PlayerWindow : Window
             if (_resumeTarget > 0 && _player.IsSeekable) _player.Time = (long)(_resumeTarget * 1000);
             ApplyAspect();
         }
+        ApplyRate();
         UpdatePlayButton();
         ScheduleHide();
     }
@@ -1000,6 +1031,63 @@ public sealed class PlayerWindow : Window
         }
     }
 
+    // MARK: Speed
+
+    static string SpeedLabel(float speed) => speed.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + "\u00D7";
+
+    /// <summary>The speed VLC should play at now (live channels always normal).</summary>
+    float PlaybackRate => Current?.IsLive != false ? 1f : _boosting ? HoldSpeed : _speed;
+
+    void ApplyRate()
+    {
+        var rate = PlaybackRate;
+        if (Math.Abs(_player.Rate - rate) > 0.01f) _player.SetRate(rate);
+    }
+
+    void ShowSpeed(Button anchor)
+    {
+        var items = new (string glyph, string label, Action action)?[Speeds.Length];
+        for (var i = 0; i < Speeds.Length; i++)
+        {
+            var speed = Speeds[i];
+            Action pick = () => SetSpeed(speed);
+            items[i] = (Math.Abs(speed - _speed) < 0.01f ? "\uE73E" : "", SpeedLabel(speed), pick);
+        }
+        var menu = Kit.Menu(items);
+        menu.FlowDirection = FlowDirection.LeftToRight;
+        menu.PlacementTarget = anchor;
+        menu.Placement = PlacementMode.Bottom;
+        ShowControls(autoHide: false);
+        menu.Closed += (_, _) => ScheduleHide();
+        menu.IsOpen = true;
+    }
+
+    void SetSpeed(float speed)
+    {
+        _speed = speed;
+        _speedButton.ToolTip = $"{L("speed")}: {SpeedLabel(speed)}";
+        ApplyRate();
+        Toast.Show(Math.Abs(speed - 1f) < 0.01f ? L("speed_normal") : L("speed_set", SpeedLabel(speed)));
+    }
+
+    /// <summary>Mouse button held on the picture: 2× until it's let go (films and episodes, while playing).</summary>
+    void StartBoost()
+    {
+        if (_boosting || Current?.IsLive != false || !_player.IsPlaying) return;
+        _boosting = true;
+        _clickTimer.Stop();
+        ApplyRate();
+        _boostBadge.Visibility = Visibility.Visible;
+    }
+
+    void EndBoost()
+    {
+        if (!_boosting) return;
+        _boosting = false;
+        ApplyRate();
+        _boostBadge.Visibility = Visibility.Collapsed;
+    }
+
     // MARK: Full screen and mini player
 
     void ToggleFullScreen()
@@ -1095,16 +1183,37 @@ public sealed class PlayerWindow : Window
     void OnOverlayClick(object sender, MouseButtonEventArgs e)
     {
         if (e.OriginalSource != _overlay) return;
+        _overlay.Focus();
         if (e.ClickCount == 2)
         {
             _clickTimer.Stop();
+            _holdTimer.Stop();
+            _pressed = false;
             if (_miniMode) ToggleMini(); else ToggleFullScreen();
             return;
         }
+        // Held down for a moment: 2× (see _holdTimer). Let go quickly: a click.
+        _pressed = true;
+        _holdTimer.Stop();
+        _holdTimer.Start();
+        _overlay.CaptureMouse();
+    }
+
+    void OnOverlayRelease(object sender, MouseButtonEventArgs e)
+    {
+        if (!_pressed) return;
+        _pressed = false;
+        _holdTimer.Stop();
+        if (_boosting)
+        {
+            EndBoost();
+            if (_overlay.IsMouseCaptured) _overlay.ReleaseMouseCapture();
+            return;
+        }
+        if (_overlay.IsMouseCaptured) _overlay.ReleaseMouseCapture();
         // Wait a moment in case it's a double-click.
         _clickTimer.Stop();
         _clickTimer.Start();
-        _overlay.Focus();
     }
 
     void OnKey(object sender, KeyEventArgs e)
@@ -1144,6 +1253,7 @@ public sealed class PlayerWindow : Window
         Toast.Shown -= OnToast;
         _tick.Stop();
         _hide.Stop();
+        _holdTimer.Stop();
         _epgCts?.Cancel();
         SaveCurrent();
         Store.SaveSettings();

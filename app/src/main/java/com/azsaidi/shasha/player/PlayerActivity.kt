@@ -22,6 +22,7 @@ import android.util.Rational
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -47,6 +48,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
@@ -101,6 +103,18 @@ class PlayerActivity : ComponentActivity() {
     private var skipSide = 0
     private var skipTotal = 0
     private var lastSkipAt = 0L
+    /** "2× ▶▶" shown while a finger is held on the picture. */
+    private lateinit var boostBadge: TextView
+    private var boosting = false
+    private var speedBeforeBoost = 1f
+    // Recent touches on the picture, to tell a double-tap that strays onto the previous/next
+    // button from a real press of it.
+    private var lastTouchAt = 0L
+    private var lastTouchX = 0.5f
+    private var ignoreTapsUntil = 0L
+    private var pendingZap: Runnable? = null
+    private var pendingZapAt = 0L
+    private var pendingZapSide = 0
     private lateinit var titleCard: LinearLayout
     private lateinit var titleCardText: TextView
     private lateinit var upNextCard: LinearLayout
@@ -528,6 +542,25 @@ class PlayerActivity : ComponentActivity() {
                 setMargins(dp(24), dp(24), dp(24), dp(96))
             },
         )
+        boostBadge = TextView(this).apply {
+            text = "${formatSpeed(HOLD_SPEED)}  ▶▶"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            textDirection = View.TEXT_DIRECTION_LTR
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(0x8C000000.toInt())
+            }
+            visibility = View.GONE
+        }
+        root.addView(
+            boostBadge,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = dp(28)
+            },
+        )
         root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         setContentView(root)
     }
@@ -547,29 +580,134 @@ class PlayerActivity : ComponentActivity() {
         visibility = View.GONE
     }
 
-    /** Phones: double-tap the left third to go back 10 s, the right third to go forward. Repeated taps add up. */
+    /**
+     * Phones: double-tap the left third to go back 10 s, the right third to go forward. Repeated taps
+     * add up (once skipping, single taps on that side keep going). Press and hold: 2× until let go.
+     */
     @android.annotation.SuppressLint("ClickableViewAccessibility")
     private fun setUpDoubleTap() {
         val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
 
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                if (SystemClock.elapsedRealtime() < ignoreTapsUntil) return true
+                val side = sideOf(e.x)
+                if (side != 0 && side == skipSide && isVod()) {
+                    skipBy(side)
+                    return true
+                }
                 if (playerView.isControllerFullyVisible) playerView.hideController() else playerView.showController()
                 return true
             }
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                val third = playerView.width / 3f
-                when {
-                    e.x < third -> skipBy(-1)
-                    e.x > playerView.width - third -> skipBy(1)
-                    else -> if (playerView.isControllerFullyVisible) playerView.hideController() else playerView.showController()
+                if (SystemClock.elapsedRealtime() < ignoreTapsUntil) return true
+                when (val side = sideOf(e.x)) {
+                    0 -> if (playerView.isControllerFullyVisible) playerView.hideController() else playerView.showController()
+                    else -> skipBy(side)
                 }
                 return true
             }
+
+            override fun onLongPress(e: MotionEvent) {
+                startBoost()
+            }
         })
-        playerView.setOnTouchListener { _, event -> detector.onTouchEvent(event) }
+        playerView.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> touchedDown(event.x)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> endBoost()
+            }
+            detector.onTouchEvent(event)
+        }
     }
+
+    /** -1 left third, 1 right third, 0 middle. */
+    private fun sideOf(x: Float): Int {
+        val third = playerView.width / 3f
+        return when {
+            x < third -> -1
+            x > playerView.width - third -> 1
+            else -> 0
+        }
+    }
+
+    private fun isVod(): Boolean {
+        val p = player ?: return false
+        val item = items.getOrNull(p.currentMediaItemIndex) ?: return false
+        return !item.isLive && p.duration != C.TIME_UNSET
+    }
+
+    private fun touchedDown(x: Float) {
+        val now = SystemClock.elapsedRealtime()
+        lastTouchAt = now
+        lastTouchX = x
+        // Previous/next pressed a moment ago and now the picture: that was a double-tap to skip.
+        val zap = pendingZap
+        if (zap != null && now - pendingZapAt < 400) {
+            handler.removeCallbacks(zap)
+            pendingZap = null
+            ignoreTapsUntil = now + 600
+            skipBy(pendingZapSide)
+        }
+    }
+
+    /**
+     * The controller's previous/next buttons. On films and episodes they wait a moment, and a press
+     * that is really half of a double-tap skips 10 s instead of changing (or restarting) the episode.
+     */
+    private fun zapFromButton(side: Int, exo: ExoPlayer, action: () -> Unit) {
+        if (!isVod()) {
+            action()
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastTouchAt < 400) {
+            val touchSide = sideOf(lastTouchX)
+            ignoreTapsUntil = now + 600
+            skipBy(if (touchSide != 0) touchSide else side)
+            return
+        }
+        pendingZap?.let { handler.removeCallbacks(it) }
+        val run = Runnable {
+            pendingZap = null
+            if (player === exo) action()
+        }
+        pendingZap = run
+        pendingZapAt = now
+        pendingZapSide = side
+        handler.postDelayed(run, 350)
+    }
+
+    /** What the on-screen controls drive: the player, with previous/next going through [zapFromButton]. */
+    private fun controlsPlayer(exo: ExoPlayer): Player = object : ForwardingPlayer(exo) {
+        override fun seekToPrevious() = zapFromButton(-1, exo) { exo.seekToPrevious() }
+        override fun seekToNext() = zapFromButton(1, exo) { exo.seekToNext() }
+        override fun seekToPreviousMediaItem() = zapFromButton(-1, exo) { exo.seekToPreviousMediaItem() }
+        override fun seekToNextMediaItem() = zapFromButton(1, exo) { exo.seekToNextMediaItem() }
+    }
+
+    /** Finger held on the picture: 2× until it's lifted (films and episodes, while playing). */
+    private fun startBoost() {
+        val p = player ?: return
+        if (boosting || inPip || !isVod() || !p.isPlaying) return
+        boosting = true
+        speedBeforeBoost = p.playbackParameters.speed
+        p.setPlaybackSpeed(HOLD_SPEED)
+        playerView.hideController()
+        boostBadge.visibility = View.VISIBLE
+        playerView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    }
+
+    private fun endBoost() {
+        if (!boosting) return
+        boosting = false
+        player?.setPlaybackSpeed(speedBeforeBoost)
+        boostBadge.visibility = View.GONE
+    }
+
+    private fun formatSpeed(speed: Float): String =
+        (if (speed % 1f == 0f) speed.toInt().toString() else speed.toString()) + "×"
 
     private fun skipBy(side: Int) {
         val p = player ?: return
@@ -974,7 +1112,7 @@ class PlayerActivity : ComponentActivity() {
         exo.prepare()
         exo.playWhenReady = true
 
-        playerView.player = exo
+        playerView.player = controlsPlayer(exo)
         mediaSession?.release()
         mediaSession = runCatching {
             MediaSession.Builder(this, exo).setId("shasha-${System.nanoTime()}").build()
@@ -994,6 +1132,9 @@ class PlayerActivity : ComponentActivity() {
 
     private fun releasePlayer() {
         val p = player ?: return
+        endBoost()
+        pendingZap?.let { handler.removeCallbacks(it) }
+        pendingZap = null
         track()
         saveCurrent()
         startIndex = p.currentMediaItemIndex.coerceIn(0, items.lastIndex)
@@ -1260,6 +1401,8 @@ class PlayerActivity : ComponentActivity() {
         const val CMD_NEXT = "next"
         const val CMD_PREVIOUS = "previous"
         const val UP_NEXT_MS = 15_000L
+        /** Speed while a finger is held on the picture. */
+        const val HOLD_SPEED = 2f
         private const val PLAYBACK_NOTIFICATION_ID = 4202
         private const val PLAYBACK_CHANNEL_ID = "playback"
     }
