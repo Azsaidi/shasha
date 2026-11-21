@@ -42,6 +42,8 @@ protocol PlaybackEngine: AnyObject {
     var volume: Float { get set }
     var muted: Bool { get set }
     var gravity: VideoGravity { get set }
+    /// Playback speed (1 = normal). Kept while paused and applied when playing.
+    var rate: Float { get set }
     var supportsPip: Bool { get }
     /// True once picture-in-picture can actually start (the video is showing).
     var canStartPip: Bool { get }
@@ -143,6 +145,8 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
     private var endObserver: Any?
     private var failObserver: Any?
     private var reported: EngineState?
+    private var appObservers: [Any] = []
+    private var wasInBackground = false
 
     var view: UIView { layerView }
     var onState: ((EngineState) -> Void)?
@@ -159,10 +163,31 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
         statusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { self?.reportStatus() }
         }
+        let center = NotificationCenter.default
+        appObservers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.wasInBackground = true
+        })
+        appObservers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.cameBack()
+        })
     }
 
     deinit {
+        appObservers.forEach { NotificationCenter.default.removeObserver($0) }
         stop()
+    }
+
+    /// Back from another app (which may have used the video decoder): hand the layer the player
+    /// again and redraw the current frame, so the picture isn't left black.
+    private func cameBack() {
+        guard wasInBackground else { return }
+        wasInBackground = false
+        guard !pipActive, player.currentItem != nil else { return }
+        layerView.playerLayer.player = nil
+        layerView.playerLayer.player = player
+        if player.rate == 0 {
+            player.seek(to: player.currentTime(), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
     }
 
     private func report(_ state: EngineState) {
@@ -208,6 +233,8 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
         let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": Http.userAgent]])
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 8
+        // Keeps voices at their normal pitch when sped up or slowed down.
+        item.audioTimePitchAlgorithm = .timeDomain
         itemObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -285,6 +312,15 @@ final class AVEngine: NSObject, PlaybackEngine, AVPictureInPictureControllerDele
             case .fill: layerView.playerLayer.videoGravity = .resizeAspectFill
             case .stretch: layerView.playerLayer.videoGravity = .resize
             }
+        }
+    }
+
+    var rate: Float = 1 {
+        didSet {
+            // play() uses defaultRate; change the running speed only while playing (setting
+            // `rate` on a paused player would start it).
+            player.defaultRate = rate
+            if player.rate > 0 { player.rate = rate }
         }
     }
 
@@ -446,7 +482,14 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
     private var pendingStart: Double = 0
     private var pipController: VLCPictureInPictureWindowControlling?
     private var pipOn = false
-    private var resignObserver: Any?
+    private var appObservers: [Any] = []
+    private var pipRequested = false
+    /// Back from the background: the video decoder may have been taken by another app, so the
+    /// picture is restarted (now if playing, otherwise on the next play).
+    private var needsVideoRefresh = false
+    /// The video track turned off while the app plays sound in the background.
+    private var hiddenVideoTrack: String?
+    private var inBackground = false
     private var currentURL: URL?
     /// Our own sound path for "Clearer sound" (VLC's equalizer can't bring back lost treble).
     private var clarityOutput: ClarityOutput?
@@ -460,20 +503,65 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         super.init()
         surface.video.engine = self
         player.drawable = surface.video
+        let center = NotificationCenter.default
         // Leaving the app while playing: carry on in picture-in-picture (if turned on in Settings).
-        resignObserver = NotificationCenter.default.addObserver(
+        appObservers.append(center.addObserver(
             forName: Notification.Name("UIApplicationWillResignActiveNotification"), object: nil, queue: .main
         ) { [weak self] _ in
-            guard let self, Store.shared.autoPip, self.player.isPlaying, !self.pipOn, self.surface.window != nil else { return }
-            self.pipController?.startPictureInPicture()
-        }
+            guard let self, Store.shared.autoPip, self.player.isPlaying, !self.pipOn, self.surface.window != nil,
+                  let pip = self.pipController else { return }
+            self.pipRequested = true
+            pip.startPictureInPicture()
+        })
+        appObservers.append(center.addObserver(
+            forName: Notification.Name("UIApplicationDidEnterBackgroundNotification"), object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.wentToBackground()
+        })
+        appObservers.append(center.addObserver(
+            forName: Notification.Name("UIApplicationDidBecomeActiveNotification"), object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.cameBack()
+        })
     }
 
     deinit {
         timer?.invalidate()
-        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        appObservers.forEach { NotificationCenter.default.removeObserver($0) }
         player.stop()
         clarityOutput?.retire()
+    }
+
+    private func wentToBackground() {
+        inBackground = true
+        guard !pipOn, !pipRequested, player.media != nil else { return }
+        needsVideoRefresh = true
+        // Playing on with the sound only: turn the picture off (as VLC's own app does). iOS
+        // doesn't let background apps draw, and it saves battery.
+        if player.isPlaying, let track = player.videoTracks.first(where: { $0.isSelected }) {
+            hiddenVideoTrack = track.trackId
+            player.deselectAllVideoTracks()
+        }
+    }
+
+    private func cameBack() {
+        pipRequested = false
+        inBackground = false
+        guard needsVideoRefresh, !pipOn else { return }
+        if player.isPlaying { refreshVideo() }
+    }
+
+    /// Restarts the video track so VLC opens a fresh decoder and picture. Without this the
+    /// picture can stay black (sound only) after another app has played video.
+    private func refreshVideo() {
+        needsVideoRefresh = false
+        let id = hiddenVideoTrack
+            ?? player.videoTracks.first(where: { $0.isSelected })?.trackId
+            ?? player.videoTracks.first?.trackId
+        hiddenVideoTrack = nil
+        guard let id else { return }
+        player.deselectAllVideoTracks()
+        player.videoTracks.first { $0.trackId == id }?.isSelectedExclusively = true
     }
 
     private func report(_ state: EngineState) {
@@ -488,6 +576,8 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
         hadPlayback = false
         stoppedByUs = false
         lastPollTime = -1
+        needsVideoRefresh = false
+        hiddenVideoTrack = nil
         report(.loading)
         guard let media = VLCMedia(url: url) else {
             report(.failed(L("err_stream_generic", "VLC")))
@@ -511,6 +601,8 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
             lastPollTime = -1
         }
         // VLC can stay in "buffering" while it plays; moving time means it's playing.
+        // A new stream can start at normal speed: keep the chosen one.
+        if player.isPlaying, abs(player.rate - rate) > 0.01 { player.rate = rate }
         let now = position
         defer { lastPollTime = now }
         if player.isPlaying, lastPollTime >= 0, now > lastPollTime {
@@ -576,12 +668,16 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
 
     var gravity: VideoGravity = .fit { didSet { surface.gravity = gravity } }
 
+    var rate: Float = 1 { didSet { player.rate = rate } }
+
     func play() {
         if reported == .ended {
             reported = nil
             hadPlayback = false
             if let media = player.media { player.media = media }
         }
+        // Paused, left the app and came back: bring the picture back as it resumes.
+        if needsVideoRefresh, !pipOn, !inBackground { refreshVideo() }
         player.play()
     }
 

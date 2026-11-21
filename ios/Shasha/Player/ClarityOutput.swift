@@ -340,6 +340,8 @@ final class ClarityOutput {
                 self.engine.connect(node, to: self.engine.mainMixerNode, format: format)
                 self.source = node
             }
+            // A new stream starts unpaused (a pause from the last one mustn't silence it).
+            self.state.withLockUnchecked { $0.pausedAt = nil }
             self.flush()
             let session = AVAudioSession.sharedInstance()
             try? session.setActive(true)
@@ -377,8 +379,36 @@ final class ClarityOutput {
                 let shift = now - at
                 for i in s.chunks.indices { s.chunks[i].pts += shift }
                 s.pausedAt = nil
+                s.started = false
             }
         }
+        // Stop the audio engine while paused. A running engine (even playing silence) makes iOS
+        // think we're still playing, so Control Center and the lock screen show "pause" instead of
+        // "play" and other apps' sound can't take over cleanly.
+        queue.async { [self] in
+            if paused {
+                if engine.isRunning { engine.pause() }
+            } else {
+                startEngine()
+            }
+        }
+    }
+
+    private var isPaused: Bool { state.withLockUnchecked { $0.pausedAt != nil } }
+
+    /// (Re)connects the sound to the current output and starts the engine. Runs on `queue`.
+    private func startEngine() {
+        guard let source else { return }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(true)
+        if !engine.isRunning, let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2) {
+            engine.disconnectNodeOutput(source)
+            engine.connect(source, to: engine.mainMixerNode, format: format)
+            engine.prepare()
+            try? engine.start()
+        }
+        latency = Int64((session.outputLatency + session.ioBufferDuration) * 1_000_000)
+        state.withLockUnchecked { $0.started = false }
     }
 
     private func flush() {
@@ -390,17 +420,9 @@ final class ClarityOutput {
     /// sound to the new output again, start, and line up with VLC's clock afresh.
     private func restart() {
         queue.async { [self] in
-            guard let source else { return }
-            let session = AVAudioSession.sharedInstance()
-            try? session.setActive(true)
-            if !engine.isRunning, let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2) {
-                engine.disconnectNodeOutput(source)
-                engine.connect(source, to: engine.mainMixerNode, format: format)
-                engine.prepare()
-                try? engine.start()
-            }
-            latency = Int64((session.outputLatency + session.ioBufferDuration) * 1_000_000)
-            state.withLockUnchecked { $0.started = false }
+            // While paused, leave it stopped: resuming starts it on the new output.
+            guard !isPaused else { return }
+            startEngine()
         }
     }
 

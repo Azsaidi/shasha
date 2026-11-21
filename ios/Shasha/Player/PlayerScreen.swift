@@ -38,6 +38,82 @@ struct AirPlayButton: UIViewRepresentable {
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }
 
+/// Taps, double-taps and press-and-hold on the picture. UIKit recognisers so a hold doesn't
+/// fight the taps; positions are reported as 0…1 across the screen.
+struct TouchSurface: UIViewRepresentable {
+    var onTouchDown: (CGFloat) -> Void
+    var onTap: (CGFloat) -> Void
+    var onDoubleTap: (CGFloat) -> Void
+    var onHold: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> TouchView {
+        let v = TouchView()
+        v.backgroundColor = .clear
+        let c = context.coordinator
+        v.onTouchDown = { [weak c] x in c?.parent.onTouchDown(x) }
+        let double = UITapGestureRecognizer(target: c, action: #selector(Coordinator.doubleTapped(_:)))
+        double.numberOfTapsRequired = 2
+        let single = UITapGestureRecognizer(target: c, action: #selector(Coordinator.tapped(_:)))
+        single.require(toFail: double)
+        let hold = UILongPressGestureRecognizer(target: c, action: #selector(Coordinator.held(_:)))
+        hold.minimumPressDuration = 0.4
+        v.addGestureRecognizer(double)
+        v.addGestureRecognizer(single)
+        v.addGestureRecognizer(hold)
+        return v
+    }
+
+    func updateUIView(_ uiView: TouchView, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    final class TouchView: UIView {
+        var onTouchDown: ((CGFloat) -> Void)?
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            super.touchesBegan(touches, with: event)
+            if let t = touches.first, bounds.width > 0 { onTouchDown?(t.location(in: self).x / bounds.width) }
+        }
+    }
+
+    final class Coordinator: NSObject {
+        var parent: TouchSurface
+
+        init(_ parent: TouchSurface) { self.parent = parent }
+
+        private func x(_ g: UIGestureRecognizer) -> CGFloat {
+            guard let v = g.view, v.bounds.width > 0 else { return 0.5 }
+            return g.location(in: v).x / v.bounds.width
+        }
+
+        @objc func tapped(_ g: UITapGestureRecognizer) { parent.onTap(x(g)) }
+        @objc func doubleTapped(_ g: UITapGestureRecognizer) { parent.onDoubleTap(x(g)) }
+
+        @objc func held(_ g: UILongPressGestureRecognizer) {
+            switch g.state {
+            case .began: parent.onHold(true)
+            case .ended, .cancelled, .failed: parent.onHold(false)
+            default: break
+            }
+        }
+    }
+}
+
+/// Recent touches on the picture, to tell a double-tap that strays onto a button from a real
+/// press of that button. A class so updating it doesn't redraw the screen.
+private final class TapMemory {
+    var touchX: CGFloat = 0.5
+    var touchAt = Date.distantPast
+    /// A single tap that is really part of a double-tap is ignored until then.
+    var ignoreTapUntil = Date.distantPast
+    /// Previous/next episode, held back a moment in case it's the first tap of a double-tap.
+    var pendingZap: Task<Void, Never>?
+    var zapSide = 0
+    var zapAt = Date.distantPast
+}
+
 /// Locks the screen orientation (landscape in the player on iPhone).
 @MainActor
 enum Orientation {
@@ -70,6 +146,7 @@ struct PlayerScreen: View {
     @State private var skipSide = 0
     @State private var skipSeconds = 0
     @State private var skipToken = 0
+    @State private var taps = TapMemory()
 
     var body: some View {
         ZStack {
@@ -93,6 +170,16 @@ struct PlayerScreen: View {
             if !model.hiding && (model.controlsVisible || model.errorMessage != nil) {
                 controls
                     .transition(.opacity)
+                    // Mid double-tap skipping, further taps go to the picture, not the buttons.
+                    .allowsHitTesting(skipSide == 0)
+            }
+
+            if model.boosting {
+                boostBadge
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 28)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
             }
 
             if !model.hiding, let message = model.errorMessage {
@@ -135,22 +222,16 @@ struct PlayerScreen: View {
     // MARK: Gestures
 
     /// Left third: double-tap back 10 s. Right third: forward 10 s. Single tap shows/hides controls.
-    /// Always left = back, like the time bar, in Arabic too.
+    /// Press and hold: 2× speed until let go. Always left = back, like the time bar, in Arabic too.
     private var gestureLayer: some View {
         GeometryReader { geo in
             ZStack {
-                HStack(spacing: 0) {
-                    Color.clear.contentShape(Rectangle())
-                        .onTapGesture(count: 2) { doubleTap(-1) }
-                        .onTapGesture { model.toggleControls() }
-                        .frame(width: geo.size.width * 0.35)
-                    Color.clear.contentShape(Rectangle())
-                        .onTapGesture { model.toggleControls() }
-                    Color.clear.contentShape(Rectangle())
-                        .onTapGesture(count: 2) { doubleTap(1) }
-                        .onTapGesture { model.toggleControls() }
-                        .frame(width: geo.size.width * 0.35)
-                }
+                TouchSurface(
+                    onTouchDown: { x in touchedDown(x) },
+                    onTap: { x in tapped(x) },
+                    onDoubleTap: { x in doubleTapped(x) },
+                    onHold: { on in held(on) }
+                )
                 if skipSide != 0 {
                     SkipFeedback(forward: skipSide > 0, seconds: skipSeconds, size: geo.size)
                         .id(skipToken)
@@ -163,9 +244,83 @@ struct PlayerScreen: View {
         .environment(\.layoutDirection, .leftToRight)
     }
 
+    /// -1 left third, 1 right third, 0 middle.
+    private func side(_ x: CGFloat) -> Int { x < 0.35 ? -1 : (x > 0.65 ? 1 : 0) }
+
+    private func touchedDown(_ x: CGFloat) {
+        let now = Date()
+        taps.touchX = x
+        taps.touchAt = now
+        // Previous/next episode tapped a moment ago and now the picture: that was a double-tap.
+        if let zap = taps.pendingZap, now.timeIntervalSince(taps.zapAt) < 0.4 {
+            zap.cancel()
+            taps.pendingZap = nil
+            taps.ignoreTapUntil = now.addingTimeInterval(0.6)
+            doubleTap(taps.zapSide)
+        }
+    }
+
+    private func tapped(_ x: CGFloat) {
+        if Date() < taps.ignoreTapUntil { return }
+        // While skipping, each further tap on that side skips again (no need to double-tap).
+        let s = side(x)
+        if s != 0, s == skipSide, model.canSkip {
+            doubleTap(s)
+            return
+        }
+        model.toggleControls()
+    }
+
+    private func doubleTapped(_ x: CGFloat) {
+        if Date() < taps.ignoreTapUntil { return }
+        let s = side(x)
+        if s == 0 {
+            model.toggleControls()
+        } else {
+            doubleTap(s)
+        }
+    }
+
+    private func held(_ on: Bool) {
+        if on {
+            model.startBoost()
+            if model.boosting { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+        } else {
+            model.endBoost()
+        }
+    }
+
+    /// Previous/next channel or episode. For films and episodes it waits a moment, so a
+    /// double-tap to skip that strays onto the button skips instead of changing episode.
+    private func zap(_ step: Int) {
+        guard model.canSkip else {
+            model.change(step)
+            return
+        }
+        let now = Date()
+        if now.timeIntervalSince(taps.touchAt) < 0.4 {
+            // Second tap of a double-tap that started on the picture.
+            let s = side(taps.touchX)
+            taps.ignoreTapUntil = now.addingTimeInterval(0.6)
+            doubleTap(s != 0 ? s : (step < 0 ? -1 : 1))
+            return
+        }
+        taps.pendingZap?.cancel()
+        taps.zapSide = step < 0 ? -1 : 1
+        taps.zapAt = now
+        let memory = taps
+        let player = self.model
+        memory.pendingZap = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            memory.pendingZap = nil
+            player.change(step)
+        }
+    }
+
     private func doubleTap(_ side: Int) {
-        guard model.canSkip else { return }
-        model.skip(Double(side * 10))
+        guard model.canSkip, side != 0 else { return }
+        model.skip(Double(side * 10), reveal: false)
         // Repeated double-taps on the same side add up: 10, 20, 30…
         if skipSide == side {
             skipSeconds += 10
@@ -252,6 +407,17 @@ struct PlayerScreen: View {
             } label: {
                 Label("\(L("aspect")): \(L(model.gravity.labelKey))", systemImage: "aspectratio")
             }
+            if isVod {
+                Menu {
+                    Picker(L("speed"), selection: Binding(get: { model.speed }, set: { model.setSpeed($0) })) {
+                        ForEach(PlayerModel.speeds, id: \.self) { s in
+                            Text(PlayerModel.speedLabel(s)).tag(s)
+                        }
+                    }
+                } label: {
+                    Label("\(L("speed")): \(PlayerModel.speedLabel(model.speed))", systemImage: "speedometer")
+                }
+            }
             Button {
                 model.showSound = true
             } label: {
@@ -301,7 +467,7 @@ struct PlayerScreen: View {
     private var centerButtons: some View {
         HStack(spacing: 36) {
             if model.canZap {
-                roundButton("backward.end.fill", 22, L("previous")) { model.change(-1) }
+                roundButton("backward.end.fill", 22, L("previous")) { zap(-1) }
             }
             if isVod {
                 roundButton("gobackward.10", 26, L("skip_back")) { model.skip(-10) }
@@ -315,7 +481,7 @@ struct PlayerScreen: View {
                 roundButton("goforward.10", 26, L("skip_forward")) { model.skip(10) }
             }
             if model.canZap {
-                roundButton("forward.end.fill", 22, L("next")) { model.change(1) }
+                roundButton("forward.end.fill", 22, L("next")) { zap(1) }
             }
         }
         .foregroundStyle(.white)
@@ -376,6 +542,22 @@ struct PlayerScreen: View {
             }
             .foregroundStyle(.white)
         }
+    }
+
+    /// Shown while a finger is held on the picture.
+    private var boostBadge: some View {
+        HStack(spacing: 6) {
+            Text(PlayerModel.speedLabel(PlayerModel.holdSpeed))
+                .font(.subheadline.bold())
+                .monospacedDigit()
+            Image(systemName: "forward.fill")
+                .font(.system(size: 13, weight: .bold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.55), in: Capsule())
+        .environment(\.layoutDirection, .leftToRight)
     }
 
     // MARK: Cards

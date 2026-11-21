@@ -281,3 +281,6 @@
 "sound_tame" = "Tame high notes";
 "sound_reset" = "Reset to Clearer";
 "sound_hint" = "Changes apply as you move them and are saved for this series, film or channel.";
+"speed" = "Speed";
+"speed_normal" = "Normal speed";
+"speed_set" = "Speed %1$@";
