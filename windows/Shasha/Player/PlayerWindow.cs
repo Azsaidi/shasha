@@ -1048,8 +1048,20 @@ public sealed class PlayerWindow : Window
         var rate = PlaybackRate;
         if (_appliedRate is float applied && Math.Abs(applied - rate) < 0.001f) return;
         var already = _appliedRate == null && Math.Abs(_player.Rate - rate) < 0.01f;
+        var slower = _appliedRate is float before && rate < before;
         _appliedRate = rate;
-        if (!already) _player.SetRate(rate);
+        if (already) return;
+        if (_clarity != null && _hadPlayback)
+        {
+            // VLC drops and restarts its sound to change speed, which buzzed through our sound
+            // path: keep the device quiet meanwhile (as for a jump). When slowing down, also jump
+            // to the same spot so sound and picture line up again straight away.
+            HoldForSeek();
+            _player.SetRate(rate);
+            if (slower && Current?.IsLive == false && _player.IsSeekable) _player.Time = _player.Time;
+            return;
+        }
+        _player.SetRate(rate);
     }
 
     void ShowSpeed(Button anchor)
