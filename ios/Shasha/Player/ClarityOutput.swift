@@ -208,9 +208,21 @@ final class ClarityOutput {
     private struct Chunk {
         var pts: Int64          // when the first frame should be heard (LibVLC clock, µs)
         var samples: [Float]    // interleaved stereo
+        var end: Int64          // when the last frame has been heard
         var read = 0            // frames already played
+        /// Dated well away from where the piece before it ended: VLC's timeline jumped (the speed
+        /// changed). Playing on regardless would put the sound out of step; line up here instead.
+        var jump = false
         var frames: Int { samples.count / 2 }
     }
+
+    /// How far ahead of the speakers sound is taken (beyond the output's own latency). VLC would
+    /// otherwise hand over its whole buffer, well over a second, already at the current speed, so a
+    /// speed change only reached the speakers after all of it had played, and then had to cut and
+    /// wait to line up again. A real sound device makes VLC wait the same way.
+    private static let maxAhead: Int64 = 150_000
+    /// Timeline jumps smaller than this are ordinary jitter.
+    private static let jumpTolerance: Int64 = 30_000
 
     /// nil = sound untouched.
     var settings: ClaritySettings? {
@@ -231,6 +243,9 @@ final class ClarityOutput {
         /// What was playing when VLC dropped everything (a speed change, a jump), already faded
         /// to silence: played out first so the sound doesn't stop mid-wave with a click.
         var tail: [Float] = []
+        /// Where the last piece received ends, to spot jumps in VLC's timeline.
+        var lastEnd: Int64?
+        var jumps = 0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -362,13 +377,38 @@ final class ClarityOutput {
         var copy = Array(UnsafeBufferPointer(start: samples, count: frames * 2))
         let settings = self.settings
         copy.withUnsafeMutableBufferPointer { dsp.process($0.baseAddress!, frames: frames, settings: settings, rate: rate) }
+        let length = Int64(Double(frames) / rate * 1_000_000)
         state.withLockUnchecked { s in
-            var chunk = Chunk(pts: pts, samples: copy)
+            var chunk = Chunk(pts: pts, samples: copy, end: pts + length)
             // A piece that arrives while paused was dated before the pause: keep it in line.
-            if let paused = s.pausedAt { chunk.pts += libvlc_clock() - paused }
+            if let paused = s.pausedAt {
+                chunk.pts += libvlc_clock() - paused
+                chunk.end = chunk.pts + length
+            }
+            if let expected = s.lastEnd, abs(chunk.pts - expected) > Self.jumpTolerance {
+                chunk.jump = true
+                s.jumps += 1
+            }
+            s.lastEnd = chunk.end
             s.chunks.append(chunk)
             // Never hold more than ~10 s (something has gone wrong if so).
             if s.chunks.count > 400 { s.chunks.removeFirst(s.chunks.count - 400) }
+        }
+        waitForRoom()
+    }
+
+    /// Makes VLC wait (as a sound device does) while plenty is already waiting to be played. Never
+    /// while paused or while the output is stopped, and never for long, so VLC's pause and jump
+    /// requests (which wait for this call to return) always go through.
+    private func waitForRoom() {
+        let giveUp = DispatchTime.now().uptimeNanoseconds + 400_000_000
+        while DispatchTime.now().uptimeNanoseconds < giveUp {
+            let ahead: Int64? = state.withLockUnchecked { s in
+                guard s.pausedAt == nil, let last = s.chunks.last else { return nil }
+                return last.end - (libvlc_clock() + latency)
+            }
+            guard let ahead, ahead > Self.maxAhead, engine.isRunning else { return }
+            usleep(5_000)
         }
     }
 
@@ -380,7 +420,11 @@ final class ClarityOutput {
             } else if let at = s.pausedAt {
                 // Everything waiting is now due that much later.
                 let shift = now - at
-                for i in s.chunks.indices { s.chunks[i].pts += shift }
+                for i in s.chunks.indices {
+                    s.chunks[i].pts += shift
+                    s.chunks[i].end += shift
+                }
+                if let end = s.lastEnd { s.lastEnd = end + shift }
                 s.pausedAt = nil
                 s.started = false
             }
@@ -432,6 +476,7 @@ final class ClarityOutput {
             }
             s.tail = tail
             s.chunks.removeAll()
+            s.lastEnd = nil
             s.started = false
         }
         dsp.reset()
@@ -508,15 +553,34 @@ final class ClarityOutput {
             let gain: Float = s.muted ? 0 : s.volume
             let firstSound = written
             var played = 0
+            var jumped = false
             let limit = fadeOutAfter == Int.max ? frames : min(frames, written + fadeFrames)
             while written < limit, !s.chunks.isEmpty {
-                let take = min(limit - written, s.chunks[0].frames - s.chunks[0].read)
-                let start = s.chunks[0].read * 2
+                if s.chunks[0].jump && s.chunks[0].read == 0 {
+                    // VLC's timeline jumped here (the piece before was faded out): line up with it
+                    // straight away, on the next pass, instead of drifting out of step.
+                    s.chunks[0].jump = false
+                    if played > 0 || fadeIn == 0 {
+                        s.started = false
+                        jumped = true
+                        break
+                    }
+                }
+                // The next piece starts after a jump: fade out the end of this one.
+                let fadeEnd = s.chunks.count > 1 && s.chunks[1].jump
+                let chunkFrames = s.chunks[0].frames
+                let startRead = s.chunks[0].read
+                let take = min(limit - written, chunkFrames - startRead)
+                let base = written
                 s.chunks[0].samples.withUnsafeBufferPointer { buf in
-                    var i = start
-                    for f in written..<(written + take) {
+                    var i = startRead * 2
+                    for f in base..<(base + take) {
                         var g = gain
                         if played < fadeIn { g *= Float(played) / Float(fadeIn) }
+                        if fadeEnd {
+                            let remaining = chunkFrames - (startRead + f - base)
+                            if remaining < fadeFrames { g *= Float(remaining) / Float(fadeFrames) }
+                        }
                         left[f] = buf[i] * g
                         right[f] = buf[i + 1] * g
                         i += 2
@@ -527,7 +591,8 @@ final class ClarityOutput {
                 written += take
                 if s.chunks[0].read >= s.chunks[0].frames { s.chunks.removeFirst() }
             }
-            let ranOut = written < frames && fadeOutAfter == Int.max
+            // After a jump the rest of this pass stays silent (cleared on the way out).
+            let ranOut = !jumped && written < frames && fadeOutAfter == Int.max
             if fadeOutAfter != Int.max || ranOut {
                 // Fade the end of what was written so stopping doesn't click.
                 if ranOut { s.started = false }

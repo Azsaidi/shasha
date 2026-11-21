@@ -712,25 +712,20 @@ final class VLCEngine: NSObject, PlaybackEngine, VLCPictureInPictureMediaControl
     var rate: Float = 1 {
         didSet {
             guard player.media != nil, abs(rate - appliedRate) > 0.001 else { return }
-            let slower = rate < appliedRate
             appliedRate = rate
-            changeRate(rate, slower: slower)
+            changeRate(rate)
         }
     }
 
     private var rateToken = 0
 
-    private func changeRate(_ newRate: Float, slower: Bool) {
+    private func changeRate(_ newRate: Float) {
         rateToken += 1
         let token = rateToken
         if clarityOutput != nil {
-            // Our own sound path fades itself out and in around the change (see ClarityOutput).
+            // Our own sound path spots the jump in VLC's timeline and lines up with it, with a
+            // short fade (see ClarityOutput).
             player.rate = newRate
-            // Slowing down through it can leave VLC out of step for a few seconds (black picture,
-            // no sound): a jump to the same spot lines picture and sound up again straight away.
-            if slower, player.isSeekable, duration > 0 {
-                player.time = VLCTime(int: Int32(max(position, 0) * 1000))
-            }
             watchPicture()
             return
         }
