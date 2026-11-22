@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
@@ -39,6 +40,7 @@ object WatchNext {
     const val EXTRA_ACCOUNT = "account"
 
     private const val MAX = 15
+    private const val TAG = "ShashaTV"
     private const val CHANNEL = "continue_watching"
     /** What the row last showed, so it's only rebuilt when that changes (not on every progress save). */
     private var lastRow: String? = null
@@ -73,8 +75,9 @@ object WatchNext {
             val entries = if (accountId == null) emptyList() else Session.continueWatching().take(MAX)
             withContext(Dispatchers.IO) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    runCatching { syncRow(context, accountId, entries) }
-                    runCatching { sync(context, accountId, entries) }
+                    Log.i(TAG, "sync: account=${accountId != null} entries=" + entries.joinToString { "${it.key}(${it.subtitle})" })
+                    try { syncRow(context, accountId, entries) } catch (e: Exception) { Log.w(TAG, "row failed", e) }
+                    try { sync(context, accountId, entries) } catch (e: Exception) { Log.w(TAG, "watch next failed", e) }
                 }
             }
         }
@@ -115,14 +118,19 @@ object WatchNext {
                     .build(),
             )
         }
+        Log.i(TAG, "row: channel=$channelId browsable=${channel?.isBrowsable}")
         val row = "$accountId|" + entries.joinToString(",") { "${it.key}:${it.upNext}:${it.position / 60_000}" }
-        if (row == lastRow) return
+        if (row == lastRow) {
+            Log.i(TAG, "row: unchanged")
+            return
+        }
         val resolver = context.contentResolver
         val existing = HashMap<String, Long>()
         resolver.query(TvContractCompat.buildPreviewProgramsUriForChannel(channelId), PreviewProgram.PROJECTION, null, null, null)?.use { cursor ->
             while (cursor.moveToNext()) {
                 val program = PreviewProgram.fromCursor(cursor)
                 val id = program.internalProviderId
+                Log.i(TAG, "row: has ${program.id} id=$id title=${program.title} ep=${program.episodeTitle}")
                 if (id == null || existing.containsKey(id)) helper.deletePreviewProgram(program.id) else existing[id] = program.id
             }
         }
@@ -137,9 +145,11 @@ object WatchNext {
             values.put(android.media.tv.TvContract.PreviewPrograms.COLUMN_WEIGHT, weight--)
             val old = existing[id]
             if (old != null) {
-                resolver.update(TvContractCompat.buildPreviewProgramUri(old), values, null, null)
+                val n = resolver.update(TvContractCompat.buildPreviewProgramUri(old), values, null, null)
+                Log.i(TAG, "row: updated $old ($id -> ${entry.subtitle}) rows=$n")
             } else {
-                resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, values)
+                val uri = resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, values)
+                Log.i(TAG, "row: inserted $uri ($id -> ${entry.subtitle})")
             }
         }
         lastRow = row
