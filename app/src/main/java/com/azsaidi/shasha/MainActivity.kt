@@ -1,6 +1,7 @@
 package com.azsaidi.shasha
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -20,6 +21,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color as ComposeColor
 import com.azsaidi.shasha.player.Playback
+import androidx.lifecycle.lifecycleScope
+import com.azsaidi.shasha.data.Session
+import com.azsaidi.shasha.data.Store
+import com.azsaidi.shasha.data.WatchNext
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Surface
 import com.azsaidi.shasha.data.Language
 import com.azsaidi.shasha.ui.ShashaNav
@@ -61,5 +67,25 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        if (savedInstanceState == null) resumeFromHomeScreen(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        resumeFromHomeScreen(intent)
+    }
+
+    /** Something chosen in the TV home screen's Continue watching row: open its account and resume it. */
+    private fun resumeFromHomeScreen(intent: Intent?) {
+        if (intent?.action != WatchNext.ACTION_RESUME) return
+        val key = intent.getStringExtra(WatchNext.EXTRA_KEY) ?: return
+        val accountId = intent.getStringExtra(WatchNext.EXTRA_ACCOUNT) ?: Store.lastAccountId
+        // Handled once (not again when the screen is rebuilt).
+        setIntent(Intent(this, MainActivity::class.java))
+        if (accountId != null && Session.account?.id != accountId) {
+            Store.accounts().firstOrNull { it.id == accountId }?.let { Session.open(it) }
+        }
+        val entry = Session.history.firstOrNull { it.key == key } ?: return
+        lifecycleScope.launch { Playback.resume(this@MainActivity, entry) }
     }
 }

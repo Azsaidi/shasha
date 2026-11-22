@@ -439,6 +439,10 @@ class PlayerActivity : ComponentActivity() {
             setShowPreviousButton(items.size > 1)
             setShowSubtitleButton(true)
             controllerShowTimeoutMs = 3500
+            // No staged hide: with it the buttons fade, but the controller only reports itself
+            // hidden ~2 s later (after an extra progress-line stage, invisible on live TV), so the
+            // top bar lingered on its own.
+            setControllerAnimationEnabled(false)
             resizeMode = resizeModes[resizeIndex].first
             setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                 topBar.visibility = if (inPip) View.GONE else visibility
@@ -1163,6 +1167,9 @@ class PlayerActivity : ComponentActivity() {
             if (existing == null || existing.finished || existing.position <= 10_000) {
                 record(next, 0, 0, upNext = true, at = System.currentTimeMillis() + 1)
             }
+        } else if (item.kind == WatchKind.EPISODE) {
+            // Last episode the player had (end of a season): find what follows in the series.
+            Playback.markNextAcrossSeasons(this, item)
         }
     }
 

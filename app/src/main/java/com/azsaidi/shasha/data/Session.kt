@@ -78,6 +78,7 @@ object Session {
         history.addAll(Store.history(acc.id))
         Store.lastAccountId = acc.id
         if (knownAuth == null) refreshAuth()
+        WatchNext.requestSync()
     }
 
     /** After editing an account: keep favourites and history, reload lists only if the login changed. */
@@ -105,6 +106,7 @@ object Session {
         loading.clear()
         favorites.clear()
         history.clear()
+        WatchNext.requestSync()
     }
 
     private fun refreshAuth() {
@@ -281,13 +283,19 @@ object Session {
             if (index >= 0) history.removeAt(index)
             history.add(0, entry)
             trim(history)
-            Store.saveHistory(accountId, history.toList())
+            saveHistory(accountId, history.toList())
         } else {
             val list = Store.history(accountId).filter { it.key != entry.key }.toMutableList()
             list.add(0, entry)
             trim(list)
-            Store.saveHistory(accountId, list)
+            saveHistory(accountId, list)
         }
+    }
+
+    /** Saves the history and refreshes the Google TV home screen's Continue watching row. */
+    private fun saveHistory(accountId: String, list: List<WatchEntry>) {
+        Store.saveHistory(accountId, list)
+        WatchNext.requestSync()
     }
 
     private fun trim(list: MutableList<WatchEntry>) {
@@ -308,18 +316,18 @@ object Session {
         } else {
             history.removeAll { it.key == entry.key }
         }
-        Store.saveHistory(acc.id, history.toList())
+        saveHistory(acc.id, history.toList())
     }
 
     fun removeHistoryKey(key: String) {
         val acc = account ?: return
-        if (history.removeAll { it.key == key }) Store.saveHistory(acc.id, history.toList())
+        if (history.removeAll { it.key == key }) saveHistory(acc.id, history.toList())
     }
 
     fun removeSeriesHistory(seriesId: String) {
         val acc = account ?: return
         if (history.removeAll { it.kind == WatchKind.EPISODE && it.seriesId == seriesId }) {
-            Store.saveHistory(acc.id, history.toList())
+            saveHistory(acc.id, history.toList())
         }
     }
 
@@ -381,7 +389,7 @@ object Session {
     fun clearHistory() {
         val acc = account ?: return
         history.clear()
-        Store.saveHistory(acc.id, emptyList())
+        saveHistory(acc.id, emptyList())
     }
 
     /** Movies and series to resume: the latest entry per movie / series, if it isn't finished. */

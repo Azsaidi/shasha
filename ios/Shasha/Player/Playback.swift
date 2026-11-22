@@ -259,6 +259,48 @@ enum Playback {
         )
     }
 
+    // MARK: Up next across seasons
+
+    /// Finished episodes already looked up (when, and the episode found), so the saves near the end
+    /// don't ask the provider again and again.
+    private static var lookedUp: [String: (at: Date, found: PlayItem?)] = [:]
+
+    /// The episode after `episodeId` in the whole series: the next in its season, or the next season's first.
+    static func nextEpisode(_ info: SeriesInfo, after episodeId: String) -> Episode? {
+        let seasons = info.seasonNumbers
+        for (i, season) in seasons.enumerated() {
+            let list = info.seasons[season] ?? []
+            guard let at = list.firstIndex(where: { $0.id == episodeId }) else { continue }
+            if at + 1 < list.count { return list[at + 1] }
+            return seasons.dropFirst(i + 1).lazy.compactMap { info.seasons[$0]?.first }.first
+        }
+        return nil
+    }
+
+    /// After finishing the last episode the player had (the end of a season): looks the series up
+    /// and hands over the episode that follows (the next season's first), to show as up next in
+    /// Continue watching as the series page offers it.
+    static func nextAcrossSeasons(after finished: PlayItem, _ mark: @escaping @MainActor (PlayItem) -> Void) {
+        guard let seriesId = finished.seriesId, let api = session.api, session.account?.id == finished.accountId else { return }
+        if let seen = lookedUp[finished.streamId], Date().timeIntervalSince(seen.at) < 600 {
+            if let item = seen.found { mark(item) }
+            return
+        }
+        lookedUp[finished.streamId] = (Date(), nil)
+        Task { @MainActor in
+            guard let info = try? await api.seriesInfo(seriesId) else {
+                // Try again on the next save (offline, provider busy).
+                Self.lookedUp[finished.streamId] = nil
+                return
+            }
+            guard let next = Self.nextEpisode(info, after: finished.streamId), Self.session.account?.id == finished.accountId,
+                  let item = Self.episodeItem(seriesId: seriesId, seriesName: finished.seriesName ?? info.name ?? finished.title,
+                                         cover: info.cover ?? finished.image, next) else { return }
+            Self.lookedUp[finished.streamId] = (Date(), item)
+            mark(item)
+        }
+    }
+
     // MARK: Starting playback
 
     static func channels(_ channels: [StreamItem], index: Int) {

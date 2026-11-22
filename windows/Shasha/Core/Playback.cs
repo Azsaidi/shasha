@@ -114,6 +114,57 @@ public static class Playback
         Start(items, Math.Max(0, items.FindIndex(i => i.StreamId == d.StreamId)));
     }
 
+    /// <summary>
+    /// Finished episodes already looked up (when, and the episode found), so the saves near the end
+    /// don't ask the provider again and again.
+    /// </summary>
+    static readonly Dictionary<string, (DateTime At, PlayItem? Found)> _lookedUp = new();
+
+    /// <summary>The episode after <paramref name="episodeId"/> in the whole series: the next in its season, or the next season's first.</summary>
+    public static Episode? NextEpisode(SeriesInfo info, string episodeId)
+    {
+        var seasons = info.SeasonNumbers;
+        for (var i = 0; i < seasons.Count; i++)
+        {
+            var list = info.Seasons[seasons[i]];
+            var at = list.FindIndex(e => e.Id == episodeId);
+            if (at < 0) continue;
+            if (at + 1 < list.Count) return list[at + 1];
+            return seasons.Skip(i + 1).Select(s => info.Seasons[s].FirstOrDefault()).FirstOrDefault(e => e != null);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// After finishing the last episode the player had (the end of a season): looks the series up and
+    /// hands over the episode that follows (the next season's first), to show as up next in Continue
+    /// watching as the series page offers it.
+    /// </summary>
+    public static async void NextAcrossSeasons(PlayItem finished, Action<PlayItem> mark)
+    {
+        if (finished.SeriesId is not string seriesId || Session.Api is not { } api || Session.Account?.Id != finished.AccountId) return;
+        if (_lookedUp.TryGetValue(finished.StreamId, out var seen) && (DateTime.UtcNow - seen.At).TotalMinutes < 10)
+        {
+            if (seen.Found != null) mark(seen.Found);
+            return;
+        }
+        _lookedUp[finished.StreamId] = (DateTime.UtcNow, null);
+        SeriesInfo info;
+        try { info = await api.SeriesInfo(seriesId); }
+        catch
+        {
+            // Try again on the next save (offline, provider busy).
+            _lookedUp.Remove(finished.StreamId);
+            return;
+        }
+        var next = NextEpisode(info, finished.StreamId);
+        if (next == null || Session.Account?.Id != finished.AccountId) return;
+        var item = EpisodeItem(seriesId, finished.SeriesName ?? info.Name ?? finished.Title, info.Cover ?? finished.Image, next);
+        if (item == null) return;
+        _lookedUp[finished.StreamId] = (DateTime.UtcNow, item);
+        mark(item);
+    }
+
     /// <summary>True while a series is looked up before the player opens; more clicks are ignored.</summary>
     static bool _opening;
 

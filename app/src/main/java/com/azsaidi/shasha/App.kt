@@ -5,6 +5,7 @@ import com.azsaidi.shasha.data.CatalogCache
 import com.azsaidi.shasha.data.Connectivity
 import com.azsaidi.shasha.data.Downloads
 import com.azsaidi.shasha.data.Store
+import com.azsaidi.shasha.data.WatchNext
 
 class App : Application() {
     override fun onCreate() {
@@ -13,5 +14,6 @@ class App : Application() {
         CatalogCache.init(this)
         Downloads.init(this)
         Connectivity.init(this)
+        WatchNext.init(this)
     }
 }

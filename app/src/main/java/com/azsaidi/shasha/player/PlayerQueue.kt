@@ -15,6 +15,7 @@ import com.azsaidi.shasha.data.StreamItem
 import com.azsaidi.shasha.data.WatchEntry
 import com.azsaidi.shasha.data.WatchKind
 import com.azsaidi.shasha.data.tidyEpisodeTitle
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 data class PlayItem(
@@ -76,6 +77,76 @@ object Playback {
      * a spinner shows over the app and more taps are ignored, so a second tap can't start it twice.
      */
     val opening = mutableStateOf(false)
+
+    private val upNextScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
+    /**
+     * Finished episodes already looked up (when, and the up-next entry found), so the saves near the
+     * end don't ask the provider again and again; they just mark the same episode up next again.
+     */
+    private val lookedUp = HashMap<String, Pair<Long, WatchEntry?>>()
+
+    private fun recordUpNext(accountId: String, entry: WatchEntry) {
+        val existing = Session.historyEntry(WatchKind.EPISODE, entry.streamId)
+        if (existing != null && !existing.finished && existing.position > 10_000) return
+        Session.record(accountId, entry.copy(updatedAt = System.currentTimeMillis() + 1))
+    }
+
+    /** The episode after [episodeId] in the whole series: the next in its season, or the next season's first. */
+    fun nextEpisode(info: com.azsaidi.shasha.data.SeriesInfo, episodeId: String): Episode? {
+        val seasons = info.seasons.keys.sorted()
+        for ((i, season) in seasons.withIndex()) {
+            val list = info.seasons[season].orEmpty()
+            val at = list.indexOfFirst { it.id == episodeId }
+            if (at < 0) continue
+            list.getOrNull(at + 1)?.let { return it }
+            return seasons.drop(i + 1).firstNotNullOfOrNull { info.seasons[it]?.firstOrNull() }
+        }
+        return null
+    }
+
+    /**
+     * After finishing the last episode the player had (the end of a season): looks the series up and
+     * puts the episode that follows (the next season's first) in Continue watching as up next, as the
+     * series page offers it.
+     */
+    fun markNextAcrossSeasons(context: Context, finished: PlayItem) {
+        val seriesId = finished.seriesId ?: return
+        val api = Session.api ?: return
+        if (Session.account?.id != finished.accountId) return
+        val now = System.currentTimeMillis()
+        lookedUp[finished.streamId]?.let { (at, found) ->
+            if (at > now - 10 * 60_000) {
+                found?.let { recordUpNext(finished.accountId, it) }
+                return
+            }
+        }
+        lookedUp[finished.streamId] = now to null
+        val app = context.applicationContext
+        upNextScope.launch {
+            val info = runCatching { api.seriesInfo(seriesId) }.getOrNull() ?: run {
+                // Try again on the next save (offline, provider busy).
+                lookedUp.remove(finished.streamId)
+                return@launch
+            }
+            val next = nextEpisode(info, finished.streamId) ?: return@launch
+            if (Session.account?.id != finished.accountId) return@launch
+            val seriesName = finished.seriesName ?: info.name ?: finished.title
+            val item = episodeItem(app, seriesId, seriesName, info.cover ?: finished.image, next) ?: return@launch
+            val entry = WatchEntry(
+                kind = WatchKind.EPISODE,
+                streamId = item.streamId,
+                title = seriesName,
+                subtitle = item.title.substringAfter(" · ", item.title) + (item.subtitle?.let { " · $it" } ?: ""),
+                image = item.image,
+                extension = item.extension,
+                seriesId = seriesId,
+                seriesName = seriesName,
+                upNext = true,
+            )
+            lookedUp[finished.streamId] = System.currentTimeMillis() to entry
+            recordUpNext(finished.accountId, entry)
+        }
+    }
 
     suspend fun whileOpening(work: suspend () -> Unit) {
         if (opening.value) return

@@ -512,15 +512,27 @@ final class PlayerModel: ObservableObject, Identifiable {
         record(item, position: 0, duration: known, finished: true)
         // Put the following episode in "Continue watching" as up next.
         if item.kind == .episode, items.indices.contains(i + 1), items[i + 1].seriesId == item.seriesId {
-            let next = items[i + 1]
-            let existing = Session.shared.historyEntry(next.kind, next.streamId)
-            if existing == nil || existing!.finished || existing!.position <= 10 {
-                record(next, position: 0, duration: 0, upNext: true, at: Date().addingTimeInterval(1))
-            }
+            Self.recordUpNext(items[i + 1])
+        } else if item.kind == .episode {
+            // Last episode the player had (end of a season): find what follows in the series.
+            Playback.nextAcrossSeasons(after: item) { Self.recordUpNext($0) }
+        }
+    }
+
+    /// Marks an episode "up next" in Continue watching, unless it's already part-watched.
+    private static func recordUpNext(_ next: PlayItem) {
+        let existing = Session.shared.historyEntry(next.kind, next.streamId)
+        if existing == nil || existing!.finished || existing!.position <= 10 {
+            record(next, position: 0, duration: 0, upNext: true, at: Date().addingTimeInterval(1))
         }
     }
 
     private func record(_ item: PlayItem, position: Double, duration: Double, finished: Bool = false,
+                        upNext: Bool = false, at: Date = Date()) {
+        Self.record(item, position: position, duration: duration, finished: finished, upNext: upNext, at: at)
+    }
+
+    private static func record(_ item: PlayItem, position: Double, duration: Double, finished: Bool = false,
                         upNext: Bool = false, at: Date = Date()) {
         let episode = item.kind == .episode
         let code = item.title.components(separatedBy: " · ").dropFirst().joined(separator: " · ")

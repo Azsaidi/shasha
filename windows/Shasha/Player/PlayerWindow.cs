@@ -653,12 +653,18 @@ public sealed class PlayerWindow : Window
         Record(item, 0, known, finished: true);
         // Put the following episode in Continue watching as up next.
         if (item.Kind == WatchKind.Episode && i + 1 < _items.Count && _items[i + 1].SeriesId == item.SeriesId)
-        {
-            var next = _items[i + 1];
-            var existing = Session.HistoryEntry(next.Kind, next.StreamId);
-            if (existing == null || existing.Finished || existing.Position <= 10)
-                Record(next, 0, 0, upNext: true, at: DateTime.UtcNow.AddSeconds(1));
-        }
+            RecordUpNext(_items[i + 1]);
+        else if (item.Kind == WatchKind.Episode)
+            // Last episode the player had (end of a season): find what follows in the series.
+            Playback.NextAcrossSeasons(item, RecordUpNext);
+    }
+
+    /// <summary>Marks an episode "up next" in Continue watching, unless it's already part-watched.</summary>
+    static void RecordUpNext(PlayItem next)
+    {
+        var existing = Session.HistoryEntry(next.Kind, next.StreamId);
+        if (existing == null || existing.Finished || existing.Position <= 10)
+            Record(next, 0, 0, upNext: true, at: DateTime.UtcNow.AddSeconds(1));
     }
 
     static void Record(PlayItem item, double position, double duration, bool finished = false, bool upNext = false, DateTime? at = null)
