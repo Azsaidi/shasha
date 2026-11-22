@@ -55,12 +55,20 @@ object WatchNext {
             context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
 
     /** Called whenever the history or the open account changes; a burst of changes makes one update. */
-    fun requestSync() {
+    fun requestSync() = schedule(2_000)
+
+    /**
+     * Updates the home screen straight away: when leaving the player or the app (the TV may close
+     * the app soon after, before a delayed update would run) and when the app opens.
+     */
+    fun syncNow() = schedule(0)
+
+    private fun schedule(wait: Long) {
         val context = app ?: return
         if (!supported(context)) return
         pending?.cancel()
         pending = scope.launch {
-            delay(2_000)
+            if (wait > 0) delay(wait)
             val accountId = Session.account?.id
             val entries = if (accountId == null) emptyList() else Session.continueWatching().take(MAX)
             withContext(Dispatchers.IO) {
@@ -71,6 +79,13 @@ object WatchNext {
             }
         }
     }
+
+    /**
+     * One card per series (or film): moving on to the next episode updates the same card in place,
+     * so the home screen never keeps showing an episode that was replaced.
+     */
+    private fun cardId(accountId: String, entry: WatchEntry): String =
+        if (entry.kind == WatchKind.EPISODE) "$accountId|series:${entry.seriesId ?: entry.streamId}" else "$accountId|${entry.key}"
 
     private fun openApp(context: Context): Intent = Intent(context, MainActivity::class.java)
 
@@ -102,27 +117,44 @@ object WatchNext {
         }
         val row = "$accountId|" + entries.joinToString(",") { "${it.key}:${it.upNext}:${it.position / 60_000}" }
         if (row == lastRow) return
-        // Rebuilt in order: the home screen shows programmes in the order they were added.
         val resolver = context.contentResolver
-        val old = ArrayList<Long>()
+        val existing = HashMap<String, Long>()
         resolver.query(TvContractCompat.buildPreviewProgramsUriForChannel(channelId), PreviewProgram.PROJECTION, null, null, null)?.use { cursor ->
-            while (cursor.moveToNext()) old += PreviewProgram.fromCursor(cursor).id
+            while (cursor.moveToNext()) {
+                val program = PreviewProgram.fromCursor(cursor)
+                val id = program.internalProviderId
+                if (id == null || existing.containsKey(id)) helper.deletePreviewProgram(program.id) else existing[id] = program.id
+            }
         }
-        old.forEach { helper.deletePreviewProgram(it) }
-        if (accountId != null) {
-            for (entry in entries) helper.publishPreviewProgram(previewProgram(context, channelId, accountId, entry))
+        val wanted = LinkedHashMap<String, WatchEntry>()
+        if (accountId != null) for (e in entries) wanted.putIfAbsent(cardId(accountId, e), e)
+        for ((id, programId) in existing) if (id !in wanted) helper.deletePreviewProgram(programId)
+        // Most recent first (higher weight comes first).
+        var weight = wanted.size
+        for ((id, entry) in wanted) {
+            val program = previewProgram(context, channelId, accountId!!, id, entry, weight--)
+            val old = existing[id]
+            if (old != null) helper.updatePreviewProgram(old, program) else helper.publishPreviewProgram(program)
         }
         lastRow = row
     }
 
     @SuppressLint("RestrictedApi")
-    private fun previewProgram(context: Context, channelId: Long, accountId: String, entry: WatchEntry): PreviewProgram {
+    private fun previewProgram(
+        context: Context,
+        channelId: Long,
+        accountId: String,
+        id: String,
+        entry: WatchEntry,
+        weight: Int,
+    ): PreviewProgram {
         val episode = entry.kind == WatchKind.EPISODE
         val builder = PreviewProgram.Builder()
         builder.setChannelId(channelId)
             .setType(if (episode) TvContractCompat.PreviewProgramColumns.TYPE_TV_EPISODE else TvContractCompat.PreviewProgramColumns.TYPE_MOVIE)
             .setTitle(if (episode) entry.seriesName ?: entry.title else entry.title)
-            .setInternalProviderId("$accountId|${entry.key}")
+            .setInternalProviderId(id)
+            .setWeight(weight)
             .setIntent(resumeIntent(context, accountId, entry))
         if (episode) {
             val subtitle = entry.subtitle.orEmpty()
@@ -138,10 +170,11 @@ object WatchNext {
             builder.setPosterArtAspectRatio(TvContractCompat.PreviewProgramColumns.ASPECT_RATIO_2_3)
         }
         entry.image?.takeIf { it.isNotBlank() }?.let { runCatching { builder.setPosterArtUri(Uri.parse(it)) } }
-        if (!entry.upNext && entry.position > 0 && entry.duration > 0) {
-            builder.setLastPlaybackPositionMillis(entry.position.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
-            builder.setDurationMillis(entry.duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
-        }
+        // Always written (0 when up next), so updating a card in place never keeps the previous
+        // episode's progress.
+        val started = !entry.upNext && entry.position > 0 && entry.duration > 0
+        builder.setLastPlaybackPositionMillis(if (started) entry.position.coerceAtMost(Int.MAX_VALUE.toLong()).toInt() else 0)
+        builder.setDurationMillis(if (entry.duration > 0) entry.duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt() else 0)
         return builder.build()
     }
 
@@ -163,7 +196,7 @@ object WatchNext {
             }
         }
         val wanted = LinkedHashMap<String, WatchEntry>()
-        if (accountId != null) for (e in entries) wanted["$accountId|${e.key}"] = e
+        if (accountId != null) for (e in entries) wanted.putIfAbsent(cardId(accountId, e), e)
 
         for ((id, program) in existing) {
             if (id !in wanted) resolver.delete(TvContractCompat.buildWatchNextProgramUri(program.id), null, null)
@@ -211,10 +244,11 @@ object WatchNext {
             builder.setPosterArtAspectRatio(TvContractCompat.PreviewProgramColumns.ASPECT_RATIO_2_3)
         }
         entry.image?.takeIf { it.isNotBlank() }?.let { runCatching { builder.setPosterArtUri(Uri.parse(it)) } }
-        if (!entry.upNext && entry.position > 0 && entry.duration > 0) {
-            builder.setLastPlaybackPositionMillis(entry.position.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
-            builder.setDurationMillis(entry.duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
-        }
+        // Always written (0 when up next), so updating a card in place never keeps the previous
+        // episode's progress.
+        val started = !entry.upNext && entry.position > 0 && entry.duration > 0
+        builder.setLastPlaybackPositionMillis(if (started) entry.position.coerceAtMost(Int.MAX_VALUE.toLong()).toInt() else 0)
+        builder.setDurationMillis(if (entry.duration > 0) entry.duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt() else 0)
         return builder.build()
     }
 }

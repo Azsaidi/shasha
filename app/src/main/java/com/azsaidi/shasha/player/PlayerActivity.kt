@@ -70,6 +70,7 @@ import com.azsaidi.shasha.data.Http
 import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.Store
 import com.azsaidi.shasha.data.WatchEntry
+import com.azsaidi.shasha.data.WatchNext
 import com.azsaidi.shasha.data.WatchKind
 import com.azsaidi.shasha.ui.formatDuration
 import com.azsaidi.shasha.ui.isTelevision
@@ -311,6 +312,8 @@ class PlayerActivity : ComponentActivity() {
         handler.removeCallbacks(ticker)
         handler.removeCallbacks(upNextTicker)
         releasePlayer()
+        // The progress just saved goes to the TV home screen now (the TV may close the app soon).
+        WatchNext.syncNow()
         // The PiP window was closed: don't leave an invisible player behind.
         if (inPip) finish()
     }

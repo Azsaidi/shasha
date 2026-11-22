@@ -70,6 +70,17 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) resumeFromHomeScreen(intent)
     }
 
+    override fun onStart() {
+        super.onStart()
+        WatchNext.syncNow()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Before the TV closes the app in the background.
+        WatchNext.syncNow()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         resumeFromHomeScreen(intent)
