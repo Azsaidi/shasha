@@ -100,8 +100,8 @@ object WatchNext {
     @RequiresApi(Build.VERSION_CODES.O)
     private fun syncRow(context: Context, accountId: String?, entries: List<WatchEntry>) {
         val helper = PreviewChannelHelper(context)
-        val existing = helper.allChannels.firstOrNull { it.internalProviderId == CHANNEL }
-        val channelId = existing?.id ?: run {
+        val channel = helper.allChannels.firstOrNull { it.internalProviderId == CHANNEL }
+        val channelId = channel?.id ?: run {
             if (accountId == null || entries.isEmpty()) return
             val logo = ContextCompat.getDrawable(context, R.drawable.ic_launcher)?.toBitmap(320, 320) ?: return
             lastRow = null
