@@ -8,10 +8,19 @@ namespace Shasha.Player;
 /// The "Clearer sound" sliders. Clearer and Much clearer are the tuned presets (the same as the
 /// phone apps); any change makes a custom setting, saved per series, film or channel.
 /// </summary>
-public sealed record ClaritySettings(float Dialogue, float Air, float Treble, float Mud, float Focus, float Tame)
+public sealed record ClaritySettings(float Dialogue, float Air, float Treble, float Mud, float Focus, float Tame, float Balance = 0)
 {
-    public static readonly ClaritySettings Clearer = new(4, 0.5f, 3, 2, 0.25f, 0);
-    public static readonly ClaritySettings MuchClearer = new(6, 0.9f, 4.5f, 3, 0.5f, 0);
+    // Tuned on a real muffled, boomy episode: the automatic balance (Balance) does most of the work,
+    // the fixed lifts are small (a fixed +6 dB at 2.5 kHz made already-bright soundtracks shrill).
+    public static readonly ClaritySettings Clearer = new(1.5f, 0.5f, 1, 0.5f, 0.25f, 0, 0.6f);
+    public static readonly ClaritySettings MuchClearer = new(1, 0.9f, 2, 1, 0.5f, 0, 1);
+
+    /// <summary>The presets before the automatic balance; saved choices of them become the new presets.</summary>
+    static readonly ClaritySettings OldClearer = new(4, 0.5f, 3, 2, 0.25f, 0);
+    static readonly ClaritySettings OldMuchClearer = new(6, 0.9f, 4.5f, 3, 0.5f, 0);
+
+    /// <summary>Settings saved before Balance existed: the old presets become the new ones.</summary>
+    public ClaritySettings Upgraded() => Equals(OldClearer) ? Clearer : Equals(OldMuchClearer) ? MuchClearer : this;
 
     // Gains along the "Dialogue vs music" slider; 0.25 and 0.5 are exactly the presets' values.
     [System.Text.Json.Serialization.JsonIgnore] public float MidGain => Along(Focus, 1, 1.12f, 1.25f, 1.5f);
@@ -45,6 +54,7 @@ public sealed class ClarityDsp
 {
     ClaritySettings? _tuned;
     double _rate;
+    AutoBalance _balance = new(48000);
     Biquad _lowCutL = Biquad.HighPass(48000, 80), _lowCutR = Biquad.HighPass(48000, 80), _mud = Biquad.HighPass(48000, 80),
            _presence = Biquad.HighPass(48000, 80), _treble = Biquad.HighPass(48000, 80), _exciteIn = Biquad.HighPass(48000, 80),
            _exciteOut = Biquad.HighPass(48000, 80), _exciteOut2 = Biquad.HighPass(48000, 80),
@@ -66,7 +76,7 @@ public sealed class ClarityDsp
             var l = _lowCutL.Run(samples[i]);
             var r = _lowCutR.Run(samples[i + 1]);
             var side = (l - r) * 0.5f * sideGain;
-            var baseMid = _mud.Run((l + r) * 0.5f);
+            var baseMid = _mud.Run(_balance.Run((l + r) * 0.5f, s.Balance));
             var lifted = _presence.Run(baseMid);
             // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
             var upper = _exciteIn.Run(lifted);
@@ -108,6 +118,7 @@ public sealed class ClarityDsp
     {
         _rate = rate;
         _tuned = null;
+        _balance = new AutoBalance(rate);
         _lowCutL = Biquad.HighPass(rate, 80);
         _lowCutR = Biquad.HighPass(rate, 80);
         _mud = Biquad.Peak(rate, 300, 1, 0);
@@ -139,6 +150,84 @@ public sealed class ClarityDsp
         _mud.Retune(Biquad.Peak(_rate, 300, 1, -s.Mud));
         _presence.Retune(Biquad.Peak(_rate, 2500, 0.9, s.Dialogue));
         _treble.Retune(Biquad.HighShelf(_rate, 6000, s.Treble));
+    }
+
+    /// <summary>
+    /// Automatic balance: slowly measures the dialogue's tone (7 bands, about 6 s of sound) and steers it
+    /// toward natural speech, so a boomy, boxy or shrill soundtrack is evened out the way each one needs
+    /// instead of by a fixed curve. Open loop (it measures what comes in, not what goes out), so it can't
+    /// swing; at most 10 dB down or 6 dB up, changing gradually so it's never heard moving.
+    /// Same as the phone apps.
+    /// </summary>
+    sealed class AutoBalance
+    {
+        static readonly double[] Bands = { 125, 250, 500, 1000, 2000, 3000, 4500 };
+        const double Q = 1.4;
+        const int Block = 512;
+        /// <summary>Natural speech (long-term average speech spectrum) as these bands measure it, dB, mean 0.</summary>
+        static readonly double[] Target = { 2.65, 5.13, 5.83, 2.01, -2.68, -5.28, -7.66 };
+
+        readonly double _rate;
+        readonly Biquad[] _meters, _eq;
+        readonly double[] _energy = new double[7], _estimate = new double[7], _gains = new double[7];
+        readonly double _keep;
+        bool _hasEstimate;
+        double _total, _floor = double.NaN;
+        int _count;
+
+        public AutoBalance(double rate)
+        {
+            _rate = rate;
+            _meters = Bands.Select(b => Biquad.BandPass(rate, b, Q)).ToArray();
+            _eq = Bands.Select(b => Biquad.Peak(rate, b, Q, 0)).ToArray();
+            _keep = Math.Exp(-Block / (6 * rate));
+        }
+
+        public float Run(float x, float strength)
+        {
+            for (var i = 0; i < _meters.Length; i++)
+            {
+                double b = _meters[i].Run(x);
+                _energy[i] += b * b;
+            }
+            _total += (double)x * x;
+            if (++_count == Block) Update(strength);
+            var y = x;
+            foreach (var f in _eq) y = f.Run(y);
+            return y;
+        }
+
+        void Update(double strength)
+        {
+            var level = 10 * Math.Log10(_total / Block + 1e-20);
+            // Background level: follows quiet parts at once, rises only slowly (~0.5 dB/s).
+            _floor = double.IsNaN(_floor) ? level : Math.Min(level, _floor + 0.005);
+            // Learn only from sound well above the background (not from silence or hiss).
+            if (level > _floor + 10 && level > -70)
+            {
+                for (var i = 0; i < _energy.Length; i++)
+                {
+                    var e = _energy[i] / Block;
+                    _estimate[i] = _hasEstimate ? _keep * _estimate[i] + (1 - _keep) * e : e;
+                }
+                _hasEstimate = true;
+            }
+            if (_hasEstimate)
+            {
+                var diff = new double[_estimate.Length];
+                for (var i = 0; i < diff.Length; i++) diff[i] = Target[i] - 10 * Math.Log10(_estimate[i] + 1e-20);
+                var mean = diff.Average();
+                for (var i = 0; i < _gains.Length; i++)
+                {
+                    var want = Math.Clamp(diff[i] - mean, -10, 6) * strength;
+                    _gains[i] += (want - _gains[i]) * 0.02;
+                    _eq[i].Retune(Biquad.Peak(_rate, Bands[i], Q, _gains[i]));
+                }
+            }
+            Array.Clear(_energy);
+            _total = 0;
+            _count = 0;
+        }
     }
 
     /// <summary>One second-order filter (RBJ audio cookbook), with its own memory.</summary>
@@ -179,6 +268,13 @@ public sealed class ClarityDsp
         {
             var w = Omega(rate, hz); var alpha = Math.Sin(w) / (2 * q); var c = Math.Cos(w);
             return new Biquad((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + alpha, -2 * c, 1 - alpha);
+        }
+
+        /// <summary>Band-pass, 0 dB at the centre (for measuring a band).</summary>
+        public static Biquad BandPass(double rate, double hz, double q)
+        {
+            var w = Omega(rate, hz); var alpha = Math.Sin(w) / (2 * q); var c = Math.Cos(w);
+            return new Biquad(alpha, 0, -alpha, 1 + alpha, -2 * c, 1 - alpha);
         }
 
         public static Biquad Peak(double rate, double hz, double q, double db)

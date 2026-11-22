@@ -150,7 +150,7 @@ public static class Store
     /// <summary>Clearer sound for a series / film / channel (null = off). Older 1/2 levels become the presets.</summary>
     public static Shasha.Player.ClaritySettings? Clarity(string key)
     {
-        if (Settings.ClaritySettings.TryGetValue(key, out var s)) return s;
+        if (Settings.ClaritySettings.TryGetValue(key, out var s)) return s?.Upgraded();
         return (Settings.Clarity.TryGetValue(key, out var v) ? v : 0) switch
         {
             1 => Shasha.Player.ClaritySettings.Clearer,

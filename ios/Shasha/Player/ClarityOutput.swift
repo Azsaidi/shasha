@@ -16,9 +16,38 @@ struct ClaritySettings: Codable, Equatable {
     var focus: Float
     /// How much already high-pitched sound is held back from the lift. 0...1 (0 = off).
     var tame: Float
+    /// Automatic balance toward natural speech. 0...1 (0 = off). Set by the presets.
+    var balance: Float = 0
 
-    static let clearer = ClaritySettings(dialogue: 4, air: 0.5, treble: 3, mud: 2, focus: 0.25, tame: 0)
-    static let muchClearer = ClaritySettings(dialogue: 6, air: 0.9, treble: 4.5, mud: 3, focus: 0.5, tame: 0)
+    // Tuned on a real muffled, boomy episode: the automatic balance does most of the work, the fixed
+    // lifts are small (a fixed +6 dB at 2.5 kHz made already-bright soundtracks shrill).
+    static let clearer = ClaritySettings(dialogue: 1.5, air: 0.5, treble: 1, mud: 0.5, focus: 0.25, tame: 0, balance: 0.6)
+    static let muchClearer = ClaritySettings(dialogue: 1, air: 0.9, treble: 2, mud: 1, focus: 0.5, tame: 0, balance: 1)
+    /// The presets before the automatic balance; saved choices of them become the new presets.
+    private static let oldClearer = ClaritySettings(dialogue: 4, air: 0.5, treble: 3, mud: 2, focus: 0.25, tame: 0)
+    private static let oldMuchClearer = ClaritySettings(dialogue: 6, air: 0.9, treble: 4.5, mud: 3, focus: 0.5, tame: 0)
+
+    init(dialogue: Float, air: Float, treble: Float, mud: Float, focus: Float, tame: Float, balance: Float = 0) {
+        self.dialogue = dialogue; self.air = air; self.treble = treble
+        self.mud = mud; self.focus = focus; self.tame = tame; self.balance = balance
+    }
+
+    private enum CodingKeys: String, CodingKey { case dialogue, air, treble, mud, focus, tame, balance }
+
+    /// Settings saved before "balance" existed have none: the old presets become the new ones.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let s = ClaritySettings(
+            dialogue: try c.decode(Float.self, forKey: .dialogue), air: try c.decode(Float.self, forKey: .air),
+            treble: try c.decode(Float.self, forKey: .treble), mud: try c.decode(Float.self, forKey: .mud),
+            focus: try c.decode(Float.self, forKey: .focus), tame: try c.decodeIfPresent(Float.self, forKey: .tame) ?? 0,
+            balance: try c.decodeIfPresent(Float.self, forKey: .balance) ?? 0
+        )
+        if c.contains(.balance) { self = s }
+        else if s == Self.oldClearer { self = .clearer }
+        else if s == Self.oldMuchClearer { self = .muchClearer }
+        else { self = s }
+    }
 
     // Gains along the "Dialogue vs music" slider; 0.25 and 0.5 are exactly the presets' values.
     var midGain: Float { Self.along(focus, [1, 1.12, 1.25, 1.5]) }
@@ -53,6 +82,7 @@ struct ClaritySettings: Codable, Equatable {
 final class ClarityDSP {
     private var settings: ClaritySettings?
     private var rate = 0.0
+    private var balance = AutoBalance(rate: 48000)
     private var lowCutL = Biquad.highPass(48000, 80), lowCutR = Biquad.highPass(48000, 80)
     private var mud = Biquad.highPass(48000, 80), presence = Biquad.highPass(48000, 80), treble = Biquad.highPass(48000, 80)
     private var exciteIn = Biquad.highPass(48000, 80), exciteOut = Biquad.highPass(48000, 80), exciteOut2 = Biquad.highPass(48000, 80)
@@ -75,7 +105,7 @@ final class ClarityDSP {
             let l = lowCutL.run(samples[f * 2])
             let r = lowCutR.run(samples[f * 2 + 1])
             let side = (l - r) * 0.5 * sideGain
-            let base = mud.run((l + r) * 0.5)
+            let base = mud.run(balance.run((l + r) * 0.5, strength: s.balance))
             let lifted = presence.run(base)
             // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
             let upper = exciteIn.run(lifted)
@@ -117,6 +147,7 @@ final class ClarityDSP {
     private func build(_ rate: Double) {
         self.rate = rate
         settings = nil
+        balance = AutoBalance(rate: rate)
         lowCutL = .highPass(rate, 80)
         lowCutR = .highPass(rate, 80)
         exciteIn = .highPass(rate, 2500)
@@ -147,6 +178,78 @@ final class ClarityDSP {
         mud.retune(.peak(rate, 300, q: 1, db: -Double(s.mud)))
         presence.retune(.peak(rate, 2500, q: 0.9, db: Double(s.dialogue)))
         treble.retune(.highShelf(rate, 6000, db: Double(s.treble)))
+    }
+}
+
+/// Automatic balance: slowly measures the dialogue's tone (7 bands, about 6 s of sound) and steers it
+/// toward natural speech, so a boomy, boxy or shrill soundtrack is evened out the way each one needs
+/// instead of by a fixed curve. Open loop (it measures what comes in, not what goes out), so it can't
+/// swing; at most 10 dB down or 6 dB up, changing gradually so it's never heard moving.
+/// Same as the Android and Windows apps.
+struct AutoBalance {
+    private static let bands: [Double] = [125, 250, 500, 1000, 2000, 3000, 4500]
+    private static let q = 1.4
+    private static let block = 512
+    /// Natural speech (long-term average speech spectrum) as these bands measure it, dB, mean 0.
+    private static let target: [Double] = [2.65, 5.13, 5.83, 2.01, -2.68, -5.28, -7.66]
+
+    private let rate: Double
+    private var meters: [Biquad]
+    private var eq: [Biquad]
+    private var energy = [Double](repeating: 0, count: 7)
+    private var estimate = [Double](repeating: 0, count: 7)
+    private var gains = [Double](repeating: 0, count: 7)
+    private let keep: Double
+    private var hasEstimate = false
+    private var total = 0.0
+    private var count = 0
+    private var floor = Double.nan
+
+    init(rate: Double) {
+        self.rate = rate
+        meters = Self.bands.map { Biquad.bandPass(rate, $0, q: Self.q) }
+        eq = Self.bands.map { Biquad.peak(rate, $0, q: Self.q, db: 0) }
+        keep = exp(-Double(Self.block) / (6 * rate))
+    }
+
+    mutating func run(_ x: Float, strength: Float) -> Float {
+        for i in 0..<meters.count {
+            let b = Double(meters[i].run(x))
+            energy[i] += b * b
+        }
+        total += Double(x) * Double(x)
+        count += 1
+        if count == Self.block { update(Double(strength)) }
+        var y = x
+        for i in 0..<eq.count { y = eq[i].run(y) }
+        return y
+    }
+
+    private mutating func update(_ strength: Double) {
+        let n = Double(Self.block)
+        let level = 10 * log10(total / n + 1e-20)
+        // Background level: follows quiet parts at once, rises only slowly (~0.5 dB/s).
+        floor = floor.isNaN ? level : min(level, floor + 0.005)
+        // Learn only from sound well above the background (not from silence or hiss).
+        if level > floor + 10 && level > -70 {
+            for i in 0..<energy.count {
+                let e = energy[i] / n
+                estimate[i] = hasEstimate ? keep * estimate[i] + (1 - keep) * e : e
+            }
+            hasEstimate = true
+        }
+        if hasEstimate {
+            let diff = (0..<estimate.count).map { Self.target[$0] - 10 * log10(estimate[$0] + 1e-20) }
+            let mean = diff.reduce(0, +) / Double(diff.count)
+            for i in 0..<gains.count {
+                let want = min(max(diff[i] - mean, -10), 6) * strength
+                gains[i] += (want - gains[i]) * 0.02
+                eq[i].retune(.peak(rate, Self.bands[i], q: Self.q, db: gains[i]))
+            }
+        }
+        for i in 0..<energy.count { energy[i] = 0 }
+        total = 0
+        count = 0
     }
 }
 
@@ -182,6 +285,12 @@ struct Biquad {
     static func lowPass(_ rate: Double, _ hz: Double, q: Double = 0.707) -> Biquad {
         let w = omega(rate, hz), alpha = sin(w) / (2 * q), c = cos(w)
         return Biquad((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + alpha, -2 * c, 1 - alpha)
+    }
+
+    /// Band-pass, 0 dB at the centre (for measuring a band).
+    static func bandPass(_ rate: Double, _ hz: Double, q: Double) -> Biquad {
+        let w = omega(rate, hz), alpha = sin(w) / (2 * q), c = cos(w)
+        return Biquad(alpha, 0, -alpha, 1 + alpha, -2 * c, 1 - alpha)
     }
 
     static func peak(_ rate: Double, _ hz: Double, q: Double, db: Double) -> Biquad {
