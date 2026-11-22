@@ -224,13 +224,7 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
                 Modifier.remembered(memory, "play"),
             ) { play(fromStart = false) }
             if (resumeAt > 0 && entry != null && entry.duration > 0) {
-                LinearProgressIndicator(
-                    progress = { entry.progress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                )
+                WatchBar(entry.progress, Modifier.fillMaxWidth().height(4.dp))
             }
             if (resumeAt > 0) {
                 TextButton(onClick = { play(fromStart = true) }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
@@ -493,9 +487,9 @@ private fun EpisodeRow(
                     crop = true,
                 )
                 if (watch != null && !watch.finished && watch.progress > 0f) {
-                    LinearProgressIndicator(
-                        progress = { watch.progress },
-                        modifier = Modifier
+                    WatchBar(
+                        watch.progress,
+                        Modifier
                             .align(Alignment.BottomCenter)
                             .width(104.dp)
                             .height(3.dp),

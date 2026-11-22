@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -152,4 +154,21 @@ fun formatTime(ms: Long): String {
     val s = total % 60
     return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, s)
     else String.format(Locale.US, "%d:%02d", m, s)
+}
+
+/**
+ * How much of a film or episode has been watched: a plain bar (track and fill). Material's progress
+ * bar draws a dot at the end of the track even at 0 %, which looked odd under every card.
+ * `null` keeps the space empty (up next), so cards still line up.
+ */
+@Composable
+fun WatchBar(progress: Float?, modifier: Modifier = Modifier) {
+    if (progress == null) {
+        Spacer(modifier)
+        return
+    }
+    val accent = MaterialTheme.colorScheme.primary
+    Box(modifier.clip(RoundedCornerShape(2.dp)).background(accent.copy(alpha = 0.22f))) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).background(accent))
+    }
 }

@@ -355,13 +355,12 @@ private fun ContinueCard(entry: WatchEntry, modifier: Modifier, onClick: () -> U
         }
         // Same layout for every card (bar and both text lines always present) so rows don't shift.
         run {
-            LinearProgressIndicator(
-                progress = { if (entry.upNext) 0f else entry.progress },
-                modifier = Modifier
+            WatchBar(
+                if (entry.upNext) null else entry.progress,
+                Modifier
                     .fillMaxWidth()
                     .padding(top = 6.dp)
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(2.dp)),
+                    .height(3.dp),
             )
         }
         Text(
