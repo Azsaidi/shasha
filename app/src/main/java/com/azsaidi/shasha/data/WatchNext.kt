@@ -103,8 +103,19 @@ object WatchNext {
     @RequiresApi(Build.VERSION_CODES.O)
     private fun syncRow(context: Context, accountId: String?, entries: List<WatchEntry>) {
         val helper = PreviewChannelHelper(context)
-        val channel = helper.allChannels.firstOrNull { it.internalProviderId == CHANNEL }
-        val channelId = channel?.id ?: run {
+        val resolver = context.contentResolver
+        // Read directly: the library's channel reader crashes on a channel without a description.
+        var found: Long? = null
+        resolver.query(
+            TvContractCompat.Channels.CONTENT_URI,
+            arrayOf("_id", "internal_provider_id"),
+            null, null, null,
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                if (cursor.getString(1) == CHANNEL) found = cursor.getLong(0)
+            }
+        }
+        val channelId = found ?: run {
             if (accountId == null || entries.isEmpty()) return
             val logo = ContextCompat.getDrawable(context, R.drawable.ic_launcher)?.toBitmap(320, 320) ?: return
             lastRow = null
@@ -112,26 +123,30 @@ object WatchNext {
             helper.publishDefaultChannel(
                 PreviewChannel.Builder()
                     .setDisplayName(context.getString(R.string.continue_watching))
+                    .setDescription(context.getString(R.string.continue_watching))
                     .setAppLinkIntentUri(Uri.parse(openApp(context).toUri(Intent.URI_INTENT_SCHEME)))
                     .setLogo(logo)
                     .setInternalProviderId(CHANNEL)
                     .build(),
             )
         }
-        Log.i(TAG, "row: channel=$channelId browsable=${channel?.isBrowsable}")
+        Log.i(TAG, "row: channel=$channelId")
         val row = "$accountId|" + entries.joinToString(",") { "${it.key}:${it.upNext}:${it.position / 60_000}" }
         if (row == lastRow) {
             Log.i(TAG, "row: unchanged")
             return
         }
-        val resolver = context.contentResolver
         val existing = HashMap<String, Long>()
-        resolver.query(TvContractCompat.buildPreviewProgramsUriForChannel(channelId), PreviewProgram.PROJECTION, null, null, null)?.use { cursor ->
+        resolver.query(
+            TvContractCompat.buildPreviewProgramsUriForChannel(channelId),
+            arrayOf("_id", "internal_provider_id"),
+            null, null, null,
+        )?.use { cursor ->
             while (cursor.moveToNext()) {
-                val program = PreviewProgram.fromCursor(cursor)
-                val id = program.internalProviderId
-                Log.i(TAG, "row: has ${program.id} id=$id title=${program.title} ep=${program.episodeTitle}")
-                if (id == null || existing.containsKey(id)) helper.deletePreviewProgram(program.id) else existing[id] = program.id
+                val programId = cursor.getLong(0)
+                val id = cursor.getString(1)
+                Log.i(TAG, "row: has $programId id=$id")
+                if (id == null || existing.containsKey(id)) helper.deletePreviewProgram(programId) else existing[id] = programId
             }
         }
         val wanted = LinkedHashMap<String, WatchEntry>()
