@@ -453,6 +453,7 @@ class PlayerActivity : ComponentActivity() {
         }
 
         timeBar = playerView.findViewById(androidx.media3.ui.R.id.exo_progress)
+        if (isTv) highlightFocus(playerView)
 
         // Black curtain that fades away when a new episode starts, so the switch isn't abrupt.
         curtain = View(this).apply {
@@ -696,6 +697,35 @@ class PlayerActivity : ComponentActivity() {
             .start()
     }
 
+    /**
+     * TV: the control the remote is on gets a solid blue disc with a white ring and grows a little.
+     * The player's own highlight is a faint grey circle that's hard to see over a bright picture.
+     */
+    private fun highlightFocus(view: View) {
+        if (view is DefaultTimeBar) return
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) highlightFocus(view.getChildAt(i))
+            return
+        }
+        if (!view.isFocusable || !(view is android.widget.ImageView || view is android.widget.Button)) return
+        view.background = StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xE638BDF8.toInt())
+                setStroke(dp(3), Color.WHITE)
+            })
+            addState(intArrayOf(android.R.attr.state_pressed), GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0x66FFFFFF)
+            })
+            addState(intArrayOf(), GradientDrawable().apply { setColor(Color.TRANSPARENT) })
+        }
+        view.setOnFocusChangeListener { v, focused ->
+            val scale = if (focused) 1.18f else 1f
+            v.animate().scaleX(scale).scaleY(scale).setDuration(120).start()
+        }
+    }
+
     private fun pillParams() =
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             marginStart = dp(8)
@@ -716,10 +746,10 @@ class PlayerActivity : ComponentActivity() {
         fun shape(color: Int, stroke: Boolean) = GradientDrawable().apply {
             cornerRadius = radius
             setColor(color)
-            if (stroke) setStroke(dp(3), 0xFF38BDF8.toInt())
+            if (stroke) setStroke(dp(3), Color.WHITE)
         }
         return StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_focused), shape(0x55FFFFFF, true))
+            addState(intArrayOf(android.R.attr.state_focused), shape(0xE638BDF8.toInt(), true))
             addState(intArrayOf(android.R.attr.state_pressed), shape(0x55FFFFFF, false))
             addState(intArrayOf(), shape(fill, false))
         }
