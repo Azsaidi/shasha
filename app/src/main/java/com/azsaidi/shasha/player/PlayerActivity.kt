@@ -374,6 +374,8 @@ class PlayerActivity : ComponentActivity() {
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            // Shown and hidden with the player's controls (see the controller visibility listener).
+            visibility = View.GONE
             setPadding(dp(12), dp(12), dp(12), dp(28))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
@@ -1080,6 +1082,9 @@ class PlayerActivity : ComponentActivity() {
         lastDuration = 0
         onItemStarted(startIndex, seekToSaved = false)
         updatePipParams()
+        // Start with the full controls (top bar included), for channels as for films and episodes;
+        // they hide together after a few seconds.
+        if (!inPip) playerView.showController()
     }
 
     private fun releasePlayer() {

@@ -319,12 +319,13 @@ struct PlayerScreen: View {
             VStack(spacing: 0) {
                 topBar
                 Spacer()
-                centerButtons
-                Spacer()
                 bottomBar
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
+
+            // Always in the middle of the screen, whatever the bars above and below hold.
+            centerButtons
         }
     }
 
@@ -421,7 +422,9 @@ struct PlayerScreen: View {
         .accessibilityLabel(label)
     }
 
-    private var isVod: Bool { !(model.current?.isLive ?? true) && model.duration > 0 }
+    /// Films and episodes: the time bar and ±10 s show from the start (not once the length is
+    /// known), so the controls don't shift when it arrives.
+    private var isVod: Bool { !(model.current?.isLive ?? true) }
 
     private var centerButtons: some View {
         HStack(spacing: 36) {
@@ -479,10 +482,11 @@ struct PlayerScreen: View {
                     }
                 )
                 .tint(Color.accentColor)
+                .disabled(model.duration <= 0)
                 HStack {
                     Text(formatTime(model.scrubbing ?? model.position))
                     Spacer()
-                    Text("-" + formatTime(max(model.duration - (model.scrubbing ?? model.position), 0)))
+                    Text(model.duration > 0 ? "-" + formatTime(max(model.duration - (model.scrubbing ?? model.position), 0)) : "--:--")
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.85))

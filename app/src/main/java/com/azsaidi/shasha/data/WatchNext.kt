@@ -7,9 +7,15 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
+import androidx.tvprovider.media.tv.PreviewChannel
+import androidx.tvprovider.media.tv.PreviewChannelHelper
+import androidx.tvprovider.media.tv.PreviewProgram
 import androidx.tvprovider.media.tv.TvContractCompat
 import androidx.tvprovider.media.tv.WatchNextProgram
 import com.azsaidi.shasha.MainActivity
+import com.azsaidi.shasha.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -19,9 +25,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The "Continue watching" row on the Google TV / Android TV home screen (Android's Watch Next
- * list). It mirrors the app's own Continue watching shelf for the open account: films and
- * episodes part-watched, and the episode up next. Choosing one opens the app and resumes it.
+ * Continue watching on the Google TV / Android TV home screen, mirroring the app's own shelf for the
+ * open account (films and episodes part-watched, and the episode up next); choosing one opens the
+ * app and resumes it. Two places:
+ * - Shasha's own row (a "preview channel"), shown on the home screen like YouTube's. Google TV
+ *   shows these for apps in the top of "Your apps".
+ * - Android's Watch Next list (the older Android TV home's "Play next" row). Google TV's own
+ *   Continue watching row only takes entries from apps Google has approved, so it stays empty there.
  */
 object WatchNext {
     const val ACTION_RESUME = "com.azsaidi.shasha.RESUME"
@@ -29,6 +39,9 @@ object WatchNext {
     const val EXTRA_ACCOUNT = "account"
 
     private const val MAX = 15
+    private const val CHANNEL = "continue_watching"
+    /** What the row last showed, so it's only rebuilt when that changes (not on every progress save). */
+    private var lastRow: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var pending: Job? = null
     private var app: Context? = null
@@ -52,10 +65,84 @@ object WatchNext {
             val entries = if (accountId == null) emptyList() else Session.continueWatching().take(MAX)
             withContext(Dispatchers.IO) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    runCatching { syncRow(context, accountId, entries) }
                     runCatching { sync(context, accountId, entries) }
                 }
             }
         }
+    }
+
+    private fun openApp(context: Context): Intent = Intent(context, MainActivity::class.java)
+
+    private fun resumeIntent(context: Context, accountId: String, entry: WatchEntry): Intent =
+        openApp(context)
+            .setAction(ACTION_RESUME)
+            .putExtra(EXTRA_KEY, entry.key)
+            .putExtra(EXTRA_ACCOUNT, accountId)
+
+    /** Shasha's own "Continue watching" row on the home screen. */
+    @SuppressLint("RestrictedApi")
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun syncRow(context: Context, accountId: String?, entries: List<WatchEntry>) {
+        val helper = PreviewChannelHelper(context)
+        val existing = helper.allChannels.firstOrNull { it.internalProviderId == CHANNEL }
+        val channelId = existing?.id ?: run {
+            if (accountId == null || entries.isEmpty()) return
+            val logo = ContextCompat.getDrawable(context, R.drawable.ic_launcher)?.toBitmap(320, 320) ?: return
+            lastRow = null
+            // The app's first (default) row is shown on the home screen without asking.
+            helper.publishDefaultChannel(
+                PreviewChannel.Builder()
+                    .setDisplayName(context.getString(R.string.continue_watching))
+                    .setAppLinkIntentUri(Uri.parse(openApp(context).toUri(Intent.URI_INTENT_SCHEME)))
+                    .setLogo(logo)
+                    .setInternalProviderId(CHANNEL)
+                    .build(),
+            )
+        }
+        val row = "$accountId|" + entries.joinToString(",") { "${it.key}:${it.upNext}:${it.position / 60_000}" }
+        if (row == lastRow) return
+        // Rebuilt in order: the home screen shows programmes in the order they were added.
+        val resolver = context.contentResolver
+        val old = ArrayList<Long>()
+        resolver.query(TvContractCompat.buildPreviewProgramsUriForChannel(channelId), PreviewProgram.PROJECTION, null, null, null)?.use { cursor ->
+            while (cursor.moveToNext()) old += PreviewProgram.fromCursor(cursor).id
+        }
+        old.forEach { helper.deletePreviewProgram(it) }
+        if (accountId != null) {
+            for (entry in entries) helper.publishPreviewProgram(previewProgram(context, channelId, accountId, entry))
+        }
+        lastRow = row
+    }
+
+    @SuppressLint("RestrictedApi")
+    private fun previewProgram(context: Context, channelId: Long, accountId: String, entry: WatchEntry): PreviewProgram {
+        val episode = entry.kind == WatchKind.EPISODE
+        val builder = PreviewProgram.Builder()
+        builder.setChannelId(channelId)
+            .setType(if (episode) TvContractCompat.PreviewProgramColumns.TYPE_TV_EPISODE else TvContractCompat.PreviewProgramColumns.TYPE_MOVIE)
+            .setTitle(if (episode) entry.seriesName ?: entry.title else entry.title)
+            .setInternalProviderId("$accountId|${entry.key}")
+            .setIntent(resumeIntent(context, accountId, entry))
+        if (episode) {
+            val subtitle = entry.subtitle.orEmpty()
+            // "S2 E1 · Episode name".
+            builder.setEpisodeTitle(subtitle.ifBlank { null })
+            builder.setDescription(subtitle.ifBlank { null })
+            Regex("""S(\d+)\s*E(\d+)""").find(subtitle)?.let { m ->
+                builder.setSeasonNumber(m.groupValues[1].toInt())
+                builder.setEpisodeNumber(m.groupValues[2].toInt())
+            }
+            builder.setPosterArtAspectRatio(TvContractCompat.PreviewProgramColumns.ASPECT_RATIO_16_9)
+        } else {
+            builder.setPosterArtAspectRatio(TvContractCompat.PreviewProgramColumns.ASPECT_RATIO_2_3)
+        }
+        entry.image?.takeIf { it.isNotBlank() }?.let { runCatching { builder.setPosterArtUri(Uri.parse(it)) } }
+        if (!entry.upNext && entry.position > 0 && entry.duration > 0) {
+            builder.setLastPlaybackPositionMillis(entry.position.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+            builder.setDurationMillis(entry.duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+        }
+        return builder.build()
     }
 
     @SuppressLint("RestrictedApi")
@@ -109,12 +196,7 @@ object WatchNext {
             .setLastEngagementTimeUtcMillis(entry.updatedAt)
             .setTitle(if (episode) entry.seriesName ?: entry.title else entry.title)
             .setInternalProviderId(id)
-            .setIntent(
-                Intent(context, MainActivity::class.java)
-                    .setAction(ACTION_RESUME)
-                    .putExtra(EXTRA_KEY, entry.key)
-                    .putExtra(EXTRA_ACCOUNT, accountId),
-            )
+            .setIntent(resumeIntent(context, accountId, entry))
         if (episode) {
             // Subtitle reads "S2 E1 · Episode name".
             val subtitle = entry.subtitle.orEmpty()
