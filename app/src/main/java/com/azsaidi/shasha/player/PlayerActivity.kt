@@ -698,13 +698,15 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /**
-     * TV: the control the remote is on gets a solid blue disc with a white ring and grows a little.
-     * The player's own highlight is a faint grey circle that's hard to see over a bright picture.
+     * TV: the control the remote is on gets a solid blue disc with a white ring. The player's own
+     * highlight is a faint grey circle that's hard to see over a bright picture. The middle buttons
+     * also grow a little; the ones along the edge don't (they'd be cut off).
      */
-    private fun highlightFocus(view: View) {
+    private fun highlightFocus(view: View, zoom: Boolean = false) {
         if (view is DefaultTimeBar) return
         if (view is ViewGroup) {
-            for (i in 0 until view.childCount) highlightFocus(view.getChildAt(i))
+            val middle = zoom || view.id == androidx.media3.ui.R.id.exo_center_controls
+            for (i in 0 until view.childCount) highlightFocus(view.getChildAt(i), middle)
             return
         }
         if (!view.isFocusable || !(view is android.widget.ImageView || view is android.widget.Button)) return
@@ -720,7 +722,7 @@ class PlayerActivity : ComponentActivity() {
             })
             addState(intArrayOf(), GradientDrawable().apply { setColor(Color.TRANSPARENT) })
         }
-        view.setOnFocusChangeListener { v, focused ->
+        if (zoom) view.setOnFocusChangeListener { v, focused ->
             val scale = if (focused) 1.18f else 1f
             v.animate().scaleX(scale).scaleY(scale).setDuration(120).start()
         }
