@@ -9,6 +9,7 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -36,6 +37,7 @@ class ClarityProcessor : BaseAudioProcessor() {
     private var built = false
     private var tuned: ClaritySettings? = null
 
+    private lateinit var balance: AutoBalance
     private lateinit var lowCut: Array<Biquad>
     private lateinit var topCut: Array<Biquad>
     private lateinit var mud: Biquad
@@ -71,6 +73,7 @@ class ClarityProcessor : BaseAudioProcessor() {
         built = true
         tuned = null
         val sr = rate.toDouble()
+        balance = AutoBalance(sr)
         lowCut = Array(channels) { Biquad.highPass(sr, 80.0, 0.707) }
         topCut = Array(channels) { Biquad.lowPass(sr, 16000.0, 0.707) }
         mud = Biquad.peak(sr, 300.0, 1.0, 0.0)
@@ -105,7 +108,7 @@ class ClarityProcessor : BaseAudioProcessor() {
 
     /** The dialogue part: mud cut, speech lift, exciter, treble, then turned up. */
     private fun dialogue(input: Float, s: ClaritySettings): Float {
-        val base = mud.run(input)
+        val base = mud.run(balance.run(input, s.balance))
         val lifted = presence.run(base)
         // Exciter: square the upper mids (scaled to their level) for smooth harmonics an octave up.
         val upper = exciteIn.run(lifted)
@@ -195,6 +198,75 @@ class ClarityProcessor : BaseAudioProcessor() {
         rate = 0
     }
 
+    /**
+     * Automatic balance: slowly measures the dialogue's tone (7 bands, about 6 s of sound) and steers
+     * it toward natural speech, so a boomy, boxy or shrill soundtrack is evened out the way each one
+     * needs instead of by a fixed curve. Open loop (it measures what comes in, not what goes out), so
+     * it can't swing; at most 10 dB down or 6 dB up, changing gradually so it's never heard moving.
+     */
+    private class AutoBalance(private val sr: Double) {
+        private val meters = Array(BANDS.size) { Biquad.bandPass(sr, BANDS[it], Q) }
+        private val eq = Array(BANDS.size) { Biquad.peak(sr, BANDS[it], Q, 0.0) }
+        private val energy = DoubleArray(BANDS.size)
+        private val estimate = DoubleArray(BANDS.size)
+        private val gains = DoubleArray(BANDS.size)
+        private val keep = exp(-BLOCK / (6.0 * sr))
+        private var hasEstimate = false
+        private var total = 0.0
+        private var count = 0
+        private var floor = Double.NaN
+        private var blocks = 0
+
+        fun run(x: Float, strength: Float): Float {
+            for (i in BANDS.indices) {
+                val b = meters[i].run(x).toDouble()
+                energy[i] += b * b
+            }
+            total += x.toDouble() * x
+            if (++count == BLOCK) update(strength)
+            var y = x
+            for (f in eq) y = f.run(y)
+            return y
+        }
+
+        private fun update(strength: Float) {
+            val level = 10 * log10(total / BLOCK + 1e-20)
+            // Background level: follows quiet parts at once, rises only slowly (~0.5 dB/s).
+            floor = if (floor.isNaN()) level else minOf(level, floor + 0.005)
+            // Learn only from sound well above the background (not from silence or hiss).
+            if (level > floor + 10 && level > -70) {
+                for (i in BANDS.indices) {
+                    val e = energy[i] / BLOCK
+                    estimate[i] = if (hasEstimate) keep * estimate[i] + (1 - keep) * e else e
+                }
+                hasEstimate = true
+            }
+            if (hasEstimate) {
+                val diff = DoubleArray(BANDS.size) { TARGET[it] - 10 * log10(estimate[it] + 1e-20) }
+                val mean = diff.average()
+                for (i in BANDS.indices) {
+                    val want = (diff[i] - mean).coerceIn(-10.0, 6.0) * strength
+                    gains[i] += (want - gains[i]) * 0.02
+                    eq[i].retune(Biquad.peak(sr, BANDS[i], Q, gains[i]))
+                }
+            }
+            if (++blocks % 400 == 0) {
+                android.util.Log.i("ShashaSound", "balance x$strength: " + gains.joinToString { String.format(java.util.Locale.US, "%.1f", it) })
+            }
+            energy.fill(0.0)
+            total = 0.0
+            count = 0
+        }
+
+        companion object {
+            private val BANDS = doubleArrayOf(125.0, 250.0, 500.0, 1000.0, 2000.0, 3000.0, 4500.0)
+            private const val Q = 1.4
+            private const val BLOCK = 512
+            /** Natural speech (long-term average speech spectrum) as these bands measure it, dB, mean 0. */
+            private val TARGET = doubleArrayOf(2.65, 5.13, 5.83, 2.01, -2.68, -5.28, -7.66)
+        }
+    }
+
     /** One second-order filter (RBJ audio cookbook), with its own memory. */
     private class Biquad(
         private var b0: Float, private var b1: Float, private var b2: Float,
@@ -231,6 +303,14 @@ class ClarityProcessor : BaseAudioProcessor() {
                 val alpha = sin(w) / (2 * q)
                 val c = cos(w)
                 return make((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + alpha, -2 * c, 1 - alpha)
+            }
+
+            /** Band-pass, 0 dB at the centre (for measuring a band). */
+            fun bandPass(rate: Double, hz: Double, q: Double): Biquad {
+                val w = 2 * PI * hz.coerceAtMost(rate * 0.45) / rate
+                val alpha = sin(w) / (2 * q)
+                val c = cos(w)
+                return make(alpha, 0.0, -alpha, 1 + alpha, -2 * c, 1 - alpha)
             }
 
             fun peak(rate: Double, hz: Double, q: Double, db: Double): Biquad {
@@ -277,6 +357,8 @@ data class ClaritySettings(
     val focus: Float,
     /** How much already high-pitched sound is held back from the lift, 0..1 (0 = off). */
     val tame: Float,
+    /** Automatic balance toward natural speech, 0..1 (0 = off). Set by the presets. */
+    val balance: Float = 0f,
 ) {
     // Gains along the "Dialogue vs music" slider; 0.25 and 0.5 are exactly the presets' values.
     val midGain: Float get() = along(focus, 1f, 1.12f, 1.25f, 1.5f)
@@ -287,18 +369,32 @@ data class ClaritySettings(
     fun toJson(): String = org.json.JSONObject()
         .put("dialogue", dialogue.toDouble()).put("air", air.toDouble()).put("treble", treble.toDouble())
         .put("mud", mud.toDouble()).put("focus", focus.toDouble()).put("tame", tame.toDouble())
+        .put("balance", balance.toDouble())
         .toString()
 
     companion object {
-        val CLEARER = ClaritySettings(dialogue = 4f, air = 0.5f, treble = 3f, mud = 2f, focus = 0.25f, tame = 0f)
-        val MUCH_CLEARER = ClaritySettings(dialogue = 6f, air = 0.9f, treble = 4.5f, mud = 3f, focus = 0.5f, tame = 0f)
+        // Tuned on a real muffled, boomy episode: the automatic balance does most of the work, the
+        // fixed lifts are small (a fixed +6 dB at 2.5 kHz made already-bright soundtracks shrill).
+        val CLEARER = ClaritySettings(dialogue = 1.5f, air = 0.5f, treble = 1f, mud = 0.5f, focus = 0.25f, tame = 0f, balance = 0.6f)
+        val MUCH_CLEARER = ClaritySettings(dialogue = 1f, air = 0.9f, treble = 2f, mud = 1f, focus = 0.5f, tame = 0f, balance = 1f)
+
+        /** The presets before the automatic balance; saved choices of them become the new presets. */
+        private val OLD_CLEARER = ClaritySettings(dialogue = 4f, air = 0.5f, treble = 3f, mud = 2f, focus = 0.25f, tame = 0f)
+        private val OLD_MUCH_CLEARER = ClaritySettings(dialogue = 6f, air = 0.9f, treble = 4.5f, mud = 3f, focus = 0.5f, tame = 0f)
 
         fun fromJson(text: String): ClaritySettings? = runCatching {
             val o = org.json.JSONObject(text)
-            ClaritySettings(
+            val s = ClaritySettings(
                 o.getDouble("dialogue").toFloat(), o.getDouble("air").toFloat(), o.getDouble("treble").toFloat(),
                 o.getDouble("mud").toFloat(), o.getDouble("focus").toFloat(), o.optDouble("tame", 0.0).toFloat(),
+                o.optDouble("balance", 0.0).toFloat(),
             )
+            when {
+                o.has("balance") -> s
+                s == OLD_CLEARER -> CLEARER
+                s == OLD_MUCH_CLEARER -> MUCH_CLEARER
+                else -> s
+            }
         }.getOrNull()
 
         /** Straight lines between values at focus 0, 0.25, 0.5 and 1. */
