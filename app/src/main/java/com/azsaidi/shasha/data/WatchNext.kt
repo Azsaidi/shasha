@@ -129,12 +129,18 @@ object WatchNext {
         val wanted = LinkedHashMap<String, WatchEntry>()
         if (accountId != null) for (e in entries) wanted.putIfAbsent(cardId(accountId, e), e)
         for ((id, programId) in existing) if (id !in wanted) helper.deletePreviewProgram(programId)
-        // Most recent first (higher weight comes first).
+        // Most recent first (higher weight comes first). Written to the TV provider directly: the
+        // library version in use has no weight setter or in-place update.
         var weight = wanted.size
         for ((id, entry) in wanted) {
-            val program = previewProgram(context, channelId, accountId!!, id, entry, weight--)
+            val values = previewProgram(context, channelId, accountId!!, id, entry).toContentValues()
+            values.put(android.media.tv.TvContract.PreviewPrograms.COLUMN_WEIGHT, weight--)
             val old = existing[id]
-            if (old != null) helper.updatePreviewProgram(old, program) else helper.publishPreviewProgram(program)
+            if (old != null) {
+                resolver.update(TvContractCompat.buildPreviewProgramUri(old), values, null, null)
+            } else {
+                resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, values)
+            }
         }
         lastRow = row
     }
@@ -146,7 +152,6 @@ object WatchNext {
         accountId: String,
         id: String,
         entry: WatchEntry,
-        weight: Int,
     ): PreviewProgram {
         val episode = entry.kind == WatchKind.EPISODE
         val builder = PreviewProgram.Builder()
@@ -154,7 +159,6 @@ object WatchNext {
             .setType(if (episode) TvContractCompat.PreviewProgramColumns.TYPE_TV_EPISODE else TvContractCompat.PreviewProgramColumns.TYPE_MOVIE)
             .setTitle(if (episode) entry.seriesName ?: entry.title else entry.title)
             .setInternalProviderId(id)
-            .setWeight(weight)
             .setIntent(resumeIntent(context, accountId, entry))
         if (episode) {
             val subtitle = entry.subtitle.orEmpty()
