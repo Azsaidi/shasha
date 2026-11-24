@@ -145,7 +145,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.runtime.CompositionLocalProvider
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -225,6 +225,7 @@ fun HomeScreen(
     // instead of being left on nothing (the next press then landed on the side menu).
     val contentFocus = remember { FocusRequester() }
     var contentFocused by remember { mutableStateOf(false) }
+    val pageTop = remember { PageTop() }
     val focusScope = rememberCoroutineScope()
 
     // TV: Back from a page goes to the side menu, then to Home, and only then leaves the app
@@ -256,10 +257,11 @@ fun HomeScreen(
                                     if (!contentFocused && !railFocused) runCatching { contentFocus.requestFocus() }
                                 }
                             }
-                            // Coming back from the side menu: the item that had focus on this
-                            // page, or else the top of the page (not whatever is level with the
-                            // menu button, which was the middle of Settings or Favourites).
-                            .focusRestorer()
+                            // Coming in from the side menu: the top of the page (not whatever is
+                            // level with the menu button, which was the middle of Settings or
+                            // Favourites). Not focusRestorer: on Compose 1.7.0 it crashed the
+                            // app ("Release should only be called once").
+                            .focusProperties { enter = { pageTop.target() } }
                             .focusGroup()
                     } else {
                         Modifier
@@ -275,6 +277,7 @@ fun HomeScreen(
                     .fillMaxWidth()
             ) {
                 holder.SaveableStateProvider(tab.name) {
+                    CompositionLocalProvider(LocalPageTop provides pageTop) {
                     when (tab) {
                         HomeTab.HOME -> HomePage(open)
                         HomeTab.LIVE -> ContentTab(ContentType.LIVE, open)
@@ -283,6 +286,7 @@ fun HomeScreen(
                         HomeTab.FAVOURITES -> FavouritesTab(open)
                         HomeTab.DOWNLOADS -> DownloadsTab()
                         HomeTab.SETTINGS -> SettingsTab(onSwitchAccount, onEditAccount, onAccountRemoved)
+                    }
                     }
                 }
             }
@@ -653,6 +657,7 @@ private fun Browser(
                         label = { Text(query.ifEmpty { stringResource(R.string.search) }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         modifier = Modifier
+                            .pageTop()
                             .focusRequester(searchFocus)
                             .focusRing(RoundedCornerShape(8.dp)),
                     )
@@ -1146,6 +1151,7 @@ private fun FavouritesTab(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
                 label = { Text(stringResource(sort.label), maxLines = 1) },
                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.size(18.dp)) },
                 modifier = Modifier
+                    .pageTop()
                     .focusRequester(sortFocus)
                     .focusRing(RoundedCornerShape(8.dp)),
             )
@@ -1362,7 +1368,7 @@ private fun SettingsTab(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        OutlinedButton(onClick = { onEditAccount(account.id) }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
+        OutlinedButton(onClick = { onEditAccount(account.id) }, modifier = Modifier.fillMaxWidth().pageTop().focusRing(ButtonShape)) {
             Icon(Icons.Filled.Edit, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.edit_playlist))

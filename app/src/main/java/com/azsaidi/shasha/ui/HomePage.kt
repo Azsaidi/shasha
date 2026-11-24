@@ -127,6 +127,7 @@ fun HomePage(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier
                         .align(Alignment.CenterVertically)
+                        .pageTop()
                         .focusRequester(searchFocus)
                         .focusRing(RoundedCornerShape(8.dp)),
                 )

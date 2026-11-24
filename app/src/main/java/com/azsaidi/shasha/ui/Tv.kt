@@ -21,6 +21,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.CoroutineScope
 import android.view.KeyEvent
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -165,6 +167,36 @@ fun Modifier.upExitTo(target: FocusRequester?): Modifier =
     else this
         .focusProperties { exit = { if (it == FocusDirection.Up) target else FocusRequester.Default } }
         .focusGroup()
+
+/**
+ * Where focus lands when it moves into a page from the side menu: the first control at the top
+ * (Search, Sort, the first setting), not whatever happens to be level with the menu button.
+ */
+class PageTop {
+    val requester = FocusRequester()
+    /** True while a control on the current page carries [requester]. */
+    var attached by mutableStateOf(false)
+        internal set
+
+    /** For focusProperties.enter: the top control, or the normal choice if the page has none. */
+    fun target(): FocusRequester = if (attached) requester else FocusRequester.Default
+}
+
+val LocalPageTop = staticCompositionLocalOf<PageTop?> { null }
+
+/** Marks the control focus goes to when entering the page from the side menu. */
+fun Modifier.pageTop(): Modifier = composed {
+    val top = LocalPageTop.current
+    if (top == null) {
+        Modifier
+    } else {
+        DisposableEffect(top) {
+            top.attached = true
+            onDispose { top.attached = false }
+        }
+        Modifier.focusRequester(top.requester)
+    }
+}.then(this)
 
 /** Attach to the item with [key] so [FocusMemory] can focus it again. */
 fun Modifier.remembered(memory: FocusMemory?, key: String): Modifier =
