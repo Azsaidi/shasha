@@ -14,9 +14,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import kotlinx.coroutines.CoroutineScope
 import android.view.KeyEvent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -86,11 +91,25 @@ class FocusMemory internal constructor(private val screen: String) {
     val requester = FocusRequester()
     var key by mutableStateOf(saved[screen])
         private set
+    internal var scope: CoroutineScope? = null
+
+    /** True while this screen is waiting to put focus back on the item that was opened. */
+    val isPending: Boolean get() = screen in pending
 
     fun opened(itemKey: String) {
         key = itemKey
         saved[screen] = itemKey
         pending.add(screen)
+    }
+
+    /**
+     * Moves focus to [itemKey] now, e.g. to the neighbour of an item that was just removed, so the
+     * remote doesn't end up on nothing (and then the side menu).
+     */
+    fun moveTo(itemKey: String?) {
+        if (itemKey == null) return
+        opened(itemKey)
+        scope?.launch { restore() }
     }
 
     internal suspend fun restore() {
@@ -119,11 +138,33 @@ class FocusMemory internal constructor(private val screen: String) {
 fun rememberFocusMemory(screen: String): FocusMemory {
     val memory = remember(screen) { FocusMemory(screen) }
     val scope = rememberCoroutineScope()
+    memory.scope = scope
     val isTv = rememberIsTv()
     // Only needed with a remote; on touch screens the scroll position is already kept.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { if (isTv) scope.launch { memory.restore() } }
     return memory
 }
+
+/**
+ * The key to focus after the item with [removedKey] is taken out of [keys]: the next one, or the
+ * one before it at the end of the row.
+ */
+fun neighbourKey(keys: List<String>, removedKey: String): String? {
+    val i = keys.indexOf(removedKey)
+    if (i < 0) return null
+    return keys.getOrNull(i + 1) ?: keys.getOrNull(i - 1)
+}
+
+/**
+ * Pressing up from the top of this list goes to [target] (the screen's search or sort button)
+ * instead of whatever happens to be nearest, which was the side menu or the refresh button.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+fun Modifier.upExitTo(target: FocusRequester?): Modifier =
+    if (target == null) this
+    else this
+        .focusProperties { exit = { if (it == FocusDirection.Up) target else FocusRequester.Default } }
+        .focusGroup()
 
 /** Attach to the item with [key] so [FocusMemory] can focus it again. */
 fun Modifier.remembered(memory: FocusMemory?, key: String): Modifier =

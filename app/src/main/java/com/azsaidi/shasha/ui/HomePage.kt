@@ -58,7 +58,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.azsaidi.shasha.R
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import com.azsaidi.shasha.data.ContentType
+import com.azsaidi.shasha.data.HomeLayout
+import com.azsaidi.shasha.data.HomeRow
+import com.azsaidi.shasha.data.sortedFavourites
 import com.azsaidi.shasha.data.Library
 import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.StreamItem
@@ -71,12 +76,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** The Home tab: continue watching, recent channels, favourites, new arrivals and search across everything. */
+/** The Home tab: continue watching, favourites, recent channels, new arrivals (in the order chosen in Settings) and search across everything. */
 @Composable
 fun HomePage(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
     val isTv = rememberIsTv()
     var query by rememberSaveable { mutableStateOf("") }
     var showSearch by remember { mutableStateOf(false) }
+    // Up from the first row goes here (not to the side menu, which is nearer).
+    val searchFocus = remember { FocusRequester() }
 
     // Catalogues used for "Recently added" and search; usually instant from the disk cache.
     val libraries = remember { mutableStateMapOf<ContentType, Library>() }
@@ -120,6 +127,7 @@ fun HomePage(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier
                         .align(Alignment.CenterVertically)
+                        .focusRequester(searchFocus)
                         .focusRing(RoundedCornerShape(8.dp)),
                 )
                 if (query.isNotEmpty()) {
@@ -142,11 +150,12 @@ fun HomePage(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
 
         val q = query.trim()
         if (q.length >= 2) {
-            SearchResults(q, itemsOf(ContentType.LIVE), itemsOf(ContentType.MOVIE), itemsOf(ContentType.SERIES), libraries.size < 3, openFromHome)
+            SearchResults(q, itemsOf(ContentType.LIVE), itemsOf(ContentType.MOVIE), itemsOf(ContentType.SERIES), libraries.size < 3, if (isTv) searchFocus else null, openFromHome)
         } else {
             HomeShelves(
                 movies = itemsOf(ContentType.MOVIE),
                 series = itemsOf(ContentType.SERIES),
+                upTarget = if (isTv) searchFocus else null,
                 onOpen = onOpen,
             )
         }
@@ -169,6 +178,7 @@ fun HomePage(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
 private fun HomeShelves(
     movies: List<StreamItem>,
     series: List<StreamItem>,
+    upTarget: FocusRequester?,
     onOpen: (StreamItem, List<StreamItem>) -> Unit,
 ) {
     val context = LocalContext.current
@@ -179,117 +189,138 @@ private fun HomeShelves(
     val history = Session.history.toList()
     val continueWatching = remember(history) { Session.continueWatching() }
     val recentChannels = remember(history) { Session.recentChannels() }
-    val favorites = Session.favorites.toList()
+    val sort = HomeLayout.favouriteSort
+    val favorites = Session.favorites.toList().sortedFavourites(sort)
     val favoriteChannels = favorites.filter { it.type == ContentType.LIVE }
     val favoriteVod = favorites.filter { it.type != ContentType.LIVE }
     val newMovies = remember(movies) { movies.filter { (it.added ?: 0) > 0 }.sortedByDescending { it.added }.take(20) }
     val newSeries = remember(series) { series.filter { (it.added ?: 0) > 0 }.sortedByDescending { it.added }.take(20) }
+    val rows = HomeLayout.rows
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(Modifier.fillMaxSize().upExitTo(upTarget), contentPadding = PaddingValues(bottom = 24.dp)) {
         item { ExpiryBanner() }
 
-        if (continueWatching.isNotEmpty()) {
-            shelf(R.string.continue_watching) {
-                items(continueWatching, key = { it.key }) { entry ->
-                    ContinueCard(
-                        entry,
-                        Modifier.remembered(memory, "cw-${entry.key}"),
-                        onClick = {
-                            memory.opened("cw-${entry.key}")
-                            scope.launch { Playback.resume(context, entry) }
-                        },
-                        onLongClick = {
-                            showHistoryMenu(
-                                context,
-                                entry,
-                                onOpen = {
-                                    memory.opened("cw-${entry.key}")
-                                    val item = if (entry.kind == WatchKind.EPISODE) {
-                                        StreamItem(entry.seriesId ?: entry.streamId, entry.seriesName ?: entry.title, entry.image, null, ContentType.SERIES, null, null)
-                                    } else {
-                                        StreamItem(entry.streamId, entry.title, entry.image, null, ContentType.MOVIE, entry.extension, null)
-                                    }
-                                    onOpen(item, emptyList())
-                                },
-                            ) {
-                                memory.opened("cw-${entry.key}")
+        for (row in rows) when (row) {
+            HomeRow.CONTINUE -> if (continueWatching.isNotEmpty()) {
+                val keys = continueWatching.map { "cw-${it.key}" }
+                shelf(R.string.continue_watching) {
+                    items(continueWatching, key = { it.key }) { entry ->
+                        val key = "cw-${entry.key}"
+                        ContinueCard(
+                            entry,
+                            Modifier.remembered(memory, key),
+                            onClick = {
+                                memory.opened(key)
                                 scope.launch { Playback.resume(context, entry) }
-                            }
-                        },
-                    )
+                            },
+                            onLongClick = {
+                                showHistoryMenu(
+                                    context,
+                                    entry,
+                                    onOpen = {
+                                        memory.opened(key)
+                                        val item = if (entry.kind == WatchKind.EPISODE) {
+                                            StreamItem(entry.seriesId ?: entry.streamId, entry.seriesName ?: entry.title, entry.image, null, ContentType.SERIES, null, null)
+                                        } else {
+                                            StreamItem(entry.streamId, entry.title, entry.image, null, ContentType.MOVIE, entry.extension, null)
+                                        }
+                                        onOpen(item, emptyList())
+                                    },
+                                    onRemoved = { memory.moveTo(neighbourKey(keys, key)) },
+                                ) {
+                                    memory.opened(key)
+                                    scope.launch { Playback.resume(context, entry) }
+                                }
+                            },
+                        )
+                    }
                 }
             }
-        }
 
-        if (recentChannels.isNotEmpty()) {
-            shelf(R.string.recent_channels) {
-                itemsIndexed(recentChannels, key = { _, e -> e.key }) { index, entry ->
-                    ChannelTile(
-                        entry.title,
-                        entry.image,
-                        Modifier.remembered(memory, "rc-${entry.key}"),
-                        onClick = {
-                            memory.opened("rc-${entry.key}")
-                            Playback.recentChannels(context, recentChannels, index)
-                        },
-                        onLongClick = {
-                            showHistoryMenu(context, entry) {
-                                memory.opened("rc-${entry.key}")
+            HomeRow.RECENT_CHANNELS -> if (recentChannels.isNotEmpty()) {
+                val keys = recentChannels.map { "rc-${it.key}" }
+                shelf(R.string.recent_channels) {
+                    itemsIndexed(recentChannels, key = { _, e -> e.key }) { index, entry ->
+                        val key = "rc-${entry.key}"
+                        ChannelTile(
+                            entry.title,
+                            entry.image,
+                            Modifier.remembered(memory, key),
+                            onClick = {
+                                memory.opened(key)
                                 Playback.recentChannels(context, recentChannels, index)
-                            }
-                        },
-                    )
+                            },
+                            onLongClick = {
+                                showHistoryMenu(context, entry, onRemoved = { memory.moveTo(neighbourKey(keys, key)) }) {
+                                    memory.opened(key)
+                                    Playback.recentChannels(context, recentChannels, index)
+                                }
+                            },
+                        )
+                    }
                 }
             }
-        }
 
-        if (favoriteChannels.isNotEmpty()) {
-            shelf(R.string.favourite_channels) {
-                items(favoriteChannels, key = { it.id }) { item ->
-                    ChannelTile(
-                        item.name,
-                        item.icon,
-                        Modifier.remembered(memory, "fc-${item.id}"),
-                        onClick = {
-                            memory.opened("fc-${item.id}")
-                            onOpen(item, favoriteChannels)
-                        },
-                        onLongClick = {
-                            showStreamItemMenu(context, item) {
-                                memory.opened("fc-${item.id}")
+            HomeRow.FAVOURITE_CHANNELS -> if (favoriteChannels.isNotEmpty()) {
+                val keys = favoriteChannels.map { "fc-${it.id}" }
+                shelf(R.string.favourite_channels) {
+                    items(favoriteChannels, key = { it.id }) { item ->
+                        val key = "fc-${item.id}"
+                        ChannelTile(
+                            item.name,
+                            item.icon,
+                            Modifier.remembered(memory, key),
+                            onClick = {
+                                memory.opened(key)
                                 onOpen(item, favoriteChannels)
-                            }
-                        },
-                    )
+                            },
+                            onLongClick = {
+                                showStreamItemMenu(
+                                    context,
+                                    item,
+                                    onOpen = {
+                                        memory.opened(key)
+                                        onOpen(item, favoriteChannels)
+                                    },
+                                    onUnfavourite = { memory.moveTo(neighbourKey(keys, key)) },
+                                )
+                            },
+                        )
+                    }
                 }
             }
-        }
 
-        if (favoriteVod.isNotEmpty()) {
-            shelf(R.string.favourite_vod) {
-                items(favoriteVod, key = { "${it.type}-${it.id}" }) { item ->
-                    PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, favoriteVod) }
+            HomeRow.FAVOURITE_VOD -> if (favoriteVod.isNotEmpty()) {
+                val keys = favoriteVod.map { "${it.type.name}-${it.id}" }
+                shelf(R.string.favourite_vod) {
+                    items(favoriteVod, key = { "${it.type}-${it.id}" }) { item ->
+                        PosterCard(
+                            item,
+                            Modifier.width(118.dp),
+                            memory,
+                            onUnfavourite = { memory.moveTo(neighbourKey(keys, "${item.type.name}-${item.id}")) },
+                        ) { onOpen(item, favoriteVod) }
+                    }
                 }
             }
-        }
 
-        if (newMovies.isNotEmpty()) {
-            shelf(R.string.new_movies) {
-                items(newMovies) { item ->
-                    PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, newMovies) }
+            HomeRow.NEW_MOVIES -> if (newMovies.isNotEmpty()) {
+                shelf(R.string.new_movies) {
+                    items(newMovies) { item ->
+                        PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, newMovies) }
+                    }
                 }
             }
-        }
 
-        if (newSeries.isNotEmpty()) {
-            shelf(R.string.new_series) {
-                items(newSeries) { item ->
-                    PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, newSeries) }
+            HomeRow.NEW_SERIES -> if (newSeries.isNotEmpty()) {
+                shelf(R.string.new_series) {
+                    items(newSeries) { item ->
+                        PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, newSeries) }
+                    }
                 }
             }
         }
     }
-
 }
 
 internal fun LazyListScope.shelf(@StringRes title: Int, content: LazyListScope.() -> Unit) {
@@ -454,6 +485,7 @@ private fun SearchResults(
     movies: List<StreamItem>,
     series: List<StreamItem>,
     stillLoading: Boolean,
+    upTarget: FocusRequester?,
     onOpen: (StreamItem, List<StreamItem>) -> Unit,
 ) {
     val memory = rememberFocusMemory("home-search")
@@ -467,7 +499,7 @@ private fun SearchResults(
     }
 
     val channelsTitle = stringResource(R.string.tab_live)
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(Modifier.fillMaxSize().upExitTo(upTarget), contentPadding = PaddingValues(bottom = 24.dp)) {
         if (foundMovies.isNotEmpty()) {
             shelf(R.string.tab_movies) {
                 items(foundMovies) { item ->

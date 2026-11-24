@@ -25,6 +25,9 @@ import androidx.lifecycle.lifecycleScope
 import com.azsaidi.shasha.data.Session
 import com.azsaidi.shasha.data.Store
 import com.azsaidi.shasha.data.WatchNext
+import com.azsaidi.shasha.data.ContentType
+import com.azsaidi.shasha.data.sortedFavourites
+import com.azsaidi.shasha.ui.playSeries
 import kotlinx.coroutines.launch
 import androidx.compose.material3.Surface
 import com.azsaidi.shasha.data.Language
@@ -88,15 +91,33 @@ class MainActivity : ComponentActivity() {
 
     /** Something chosen in the TV home screen's Continue watching row: open its account and resume it. */
     private fun resumeFromHomeScreen(intent: Intent?) {
-        if (intent?.action != WatchNext.ACTION_RESUME) return
-        val key = intent.getStringExtra(WatchNext.EXTRA_KEY) ?: return
+        val action = intent?.action
+        if (action != WatchNext.ACTION_RESUME && action != WatchNext.ACTION_OPEN) return
         val accountId = intent.getStringExtra(WatchNext.EXTRA_ACCOUNT) ?: Store.lastAccountId
         // Handled once (not again when the screen is rebuilt).
         setIntent(Intent(this, MainActivity::class.java))
         if (accountId != null && Session.account?.id != accountId) {
             Store.accounts().firstOrNull { it.id == accountId }?.let { Session.open(it) }
         }
-        val entry = Session.history.firstOrNull { it.key == key } ?: return
-        lifecycleScope.launch { Playback.resume(this@MainActivity, entry) }
+        if (action == WatchNext.ACTION_RESUME) {
+            val key = intent.getStringExtra(WatchNext.EXTRA_KEY) ?: return
+            val entry = Session.history.firstOrNull { it.key == key } ?: return
+            lifecycleScope.launch { Playback.resume(this@MainActivity, entry) }
+            return
+        }
+        // A favourite: a channel plays (with the other favourite channels to zap through), a film
+        // plays from where it was left, a series carries on with the right episode.
+        val type = intent.getStringExtra(WatchNext.EXTRA_TYPE) ?: return
+        val id = intent.getStringExtra(WatchNext.EXTRA_ID) ?: return
+        val favourites = Session.favorites.toList().sortedFavourites()
+        val item = favourites.firstOrNull { it.type.name == type && it.id == id } ?: return
+        when (item.type) {
+            ContentType.LIVE -> {
+                val channels = favourites.filter { it.type == ContentType.LIVE }
+                Playback.channels(this, channels, channels.indexOf(item).coerceAtLeast(0))
+            }
+            ContentType.MOVIE -> Playback.movie(this, item.id, item.name, item.icon, item.extension)
+            ContentType.SERIES -> playSeries(this, item)
+        }
     }
 }

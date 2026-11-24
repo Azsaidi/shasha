@@ -268,6 +268,7 @@ object Session {
         val existing = favorites.indexOfFirst { it.type == item.type && it.id == item.id }
         if (existing >= 0) favorites.removeAt(existing) else favorites.add(0, item)
         Store.saveFavorites(acc.id, favorites.toList())
+        WatchNext.requestSync()
     }
 
     // ---------------------------------------------------------------- watch history

@@ -132,19 +132,24 @@ object ItemMenu {
 
 private fun toast(context: Context, text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
 
-private fun favouriteAction(context: Context, item: StreamItem): MenuAction {
+private fun favouriteAction(context: Context, item: StreamItem, onRemoved: (() -> Unit)? = null): MenuAction {
     val favourite = Session.isFavorite(item)
     return MenuAction(
         context.getString(if (favourite) R.string.remove_favourite else R.string.add_favourite),
         if (favourite) Icons.Filled.FavoriteBorder else Icons.Filled.Favorite,
     ) {
+        // Before the item goes, so focus can move to its neighbour.
+        if (favourite) onRemoved?.invoke()
         Session.toggleFavorite(item)
         toast(context, context.getString(if (favourite) R.string.removed_from_favourites else R.string.added_to_favourites, item.name))
     }
 }
 
-/** Options for a channel, film or series from any list. */
-fun showStreamItemMenu(context: Context, item: StreamItem, onOpen: (() -> Unit)?) {
+/**
+ * Options for a channel, film or series from any list. [onUnfavourite] runs when it's taken out of
+ * favourites (a favourites list moves the remote's focus to the neighbour).
+ */
+fun showStreamItemMenu(context: Context, item: StreamItem, onOpen: (() -> Unit)?, onUnfavourite: (() -> Unit)? = null) {
     val actions = ArrayList<MenuAction>()
     when (item.type) {
         ContentType.LIVE -> if (onOpen != null) {
@@ -162,7 +167,7 @@ fun showStreamItemMenu(context: Context, item: StreamItem, onOpen: (() -> Unit)?
             if (onOpen != null) actions.add(MenuAction(context.getString(R.string.open), Icons.Filled.OpenInNew, onOpen))
         }
     }
-    actions.add(favouriteAction(context, item))
+    actions.add(favouriteAction(context, item, onUnfavourite))
     when (item.type) {
         ContentType.LIVE -> actions.add(splitAction(context) { Playback.liveItem(item) })
         ContentType.MOVIE -> {
@@ -224,7 +229,7 @@ private fun downloadAction(context: Context, kind: WatchKind, streamId: String, 
 }
 
 /** Plays a series straight from its poster: resumes, moves on to the next episode, or starts at S1 E1. */
-private fun playSeries(context: Context, item: StreamItem) {
+internal fun playSeries(context: Context, item: StreamItem) {
     val api = Session.api ?: return
     menuScope.launch {
         Playback.whileOpening { playSeriesNow(context, api, item) }
@@ -261,7 +266,18 @@ private fun watchedAction(context: Context, entry: WatchEntry): MenuAction {
 }
 
 /** Options for a Continue watching card or a recently watched channel. */
-fun showHistoryMenu(context: Context, entry: WatchEntry, onOpen: (() -> Unit)? = null, onPlay: () -> Unit) {
+/**
+ * Options for a Continue watching card or a recent channel. [onRemoved] runs just before the entry
+ * leaves the row (removed or marked watched), so focus can move to its neighbour.
+ */
+fun showHistoryMenu(
+    context: Context,
+    entry: WatchEntry,
+    onOpen: (() -> Unit)? = null,
+    onRemoved: (() -> Unit)? = null,
+    onPlay: () -> Unit,
+) {
+    val removed: () -> Unit = { onRemoved?.invoke() }
     val actions = ArrayList<MenuAction>()
     actions.add(MenuAction(context.getString(R.string.play), Icons.Filled.PlayArrow, onPlay))
     // Film page, or the series page for an episode.
@@ -283,19 +299,28 @@ fun showHistoryMenu(context: Context, entry: WatchEntry, onOpen: (() -> Unit)? =
         WatchKind.LIVE -> {
             actions.add(favouriteAction(context, StreamItem(entry.streamId, entry.title, entry.image, null, ContentType.LIVE, null, null)))
             actions.add(MenuAction(context.getString(R.string.remove_from_recent), Icons.Filled.HistoryToggleOff) {
+                removed()
                 Session.removeHistoryKey(entry.key)
             })
         }
         WatchKind.MOVIE -> {
             actions.add(favouriteAction(context, StreamItem(entry.streamId, entry.title, entry.image, null, ContentType.MOVIE, entry.extension, null)))
-            actions.add(MenuAction(context.getString(R.string.mark_watched), Icons.Filled.CheckCircle) { Session.markWatched(entry, context) })
+            actions.add(MenuAction(context.getString(R.string.mark_watched), Icons.Filled.CheckCircle) {
+                removed()
+                Session.markWatched(entry, context)
+            })
             actions.add(MenuAction(context.getString(R.string.remove_from_continue), Icons.Filled.HistoryToggleOff) {
+                removed()
                 Session.removeHistoryKey(entry.key)
             })
         }
         WatchKind.EPISODE -> {
-            actions.add(MenuAction(context.getString(R.string.mark_watched), Icons.Filled.CheckCircle) { Session.markWatched(entry, context) })
+            actions.add(MenuAction(context.getString(R.string.mark_watched), Icons.Filled.CheckCircle) {
+                removed()
+                Session.markWatched(entry, context)
+            })
             actions.add(MenuAction(context.getString(R.string.remove_from_continue), Icons.Filled.HistoryToggleOff) {
+                removed()
                 Session.removeFromHistory(entry)
             })
         }

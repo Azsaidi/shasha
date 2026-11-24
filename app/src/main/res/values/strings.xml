@@ -311,4 +311,12 @@
     <string name="sound_tame">Tame high notes</string>
     <string name="sound_reset">Reset to Clearer</string>
     <string name="sound_hint">Changes apply as you move them and are saved for this series, film or channel.</string>
+    <string name="sort_fav_newest">Recently favourited</string>
+    <string name="sort_fav_oldest">First favourited</string>
+    <string name="home_rows">Home screen rows</string>
+    <string name="home_rows_hint">Choose the order of the rows on Home.</string>
+    <string name="arrange_home_rows">Arrange Home rows</string>
+    <string name="move_up">Move up</string>
+    <string name="move_down">Move down</string>
+    <string name="reset_order">Reset order</string>
 </resources>

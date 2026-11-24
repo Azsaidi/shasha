@@ -169,7 +169,7 @@ fun MovieScreen(id: String, onBack: () -> Unit) {
             null
         }
     }
-    if (isTv) LaunchedEffect(Unit) { if (!FocusMemory.hasPending()) runCatching { playFocus.requestFocus() } }
+    if (isTv) LaunchedEffect(Unit) { if (!memory.isPending) runCatching { playFocus.requestFocus() } }
 
     // Reads the history state list, so this updates when you come back from the player.
     val entry = Session.historyEntry(WatchKind.MOVIE, id)
@@ -333,7 +333,7 @@ fun SeriesScreen(id: String, onBack: () -> Unit) {
                     Playback.episodes(context, id, title, cover, list, index, fromStart)
                 }
 
-                if (isTv) LaunchedEffect(Unit) { if (!FocusMemory.hasPending()) runCatching { playFocus.requestFocus() } }
+                if (isTv) LaunchedEffect(Unit) { if (!memory.isPending) runCatching { playFocus.requestFocus() } }
 
                 LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(bottom = 24.dp)) {
                     item {

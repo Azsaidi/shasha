@@ -69,6 +69,16 @@ object Store {
         get() = prefs.getInt("auto_refresh_days", 7)
         set(value) = prefs.edit().putInt("auto_refresh_days", value).apply()
 
+    /** Home row order (names of [HomeRow]), comma separated; null = the default order. */
+    var homeRows: String?
+        get() = prefs.getString("home_rows", null)
+        set(value) = prefs.edit().putString("home_rows", value).apply()
+
+    /** How favourites are sorted ([FavouriteSort] name). */
+    var favouriteSort: String?
+        get() = prefs.getString("favourite_sort", null)
+        set(value) = prefs.edit().putString("favourite_sort", value).apply()
+
     /** Go to picture-in-picture when leaving the app during playback. */
     var autoPip: Boolean
         get() = prefs.getBoolean("auto_pip", true)

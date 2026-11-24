@@ -38,6 +38,10 @@ object WatchNext {
     const val ACTION_RESUME = "com.azsaidi.shasha.RESUME"
     const val EXTRA_KEY = "key"
     const val EXTRA_ACCOUNT = "account"
+    /** A favourite chosen on the home screen: play it (channel, film) or carry on with it (series). */
+    const val ACTION_OPEN = "com.azsaidi.shasha.OPEN"
+    const val EXTRA_TYPE = "type"
+    const val EXTRA_ID = "id"
 
     private const val MAX = 15
     private const val TAG = "ShashaTV"
@@ -73,10 +77,17 @@ object WatchNext {
             if (wait > 0) delay(wait)
             val accountId = Session.account?.id
             val entries = if (accountId == null) emptyList() else Session.continueWatching().take(MAX)
+            // Favourites follow, in the app's order, except ones already in Continue watching.
+            val favourites = if (accountId == null) emptyList() else Session.favorites.toList().sortedFavourites().filter { f ->
+                entries.none { e ->
+                    (f.type == ContentType.MOVIE && e.kind == WatchKind.MOVIE && e.streamId == f.id) ||
+                        (f.type == ContentType.SERIES && e.kind == WatchKind.EPISODE && e.seriesId == f.id)
+                }
+            }.take(MAX)
             withContext(Dispatchers.IO) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    Log.i(TAG, "sync: account=${accountId != null} entries=" + entries.joinToString { "${it.key}(${it.subtitle})" })
-                    try { syncRow(context, accountId, entries) } catch (e: Exception) { Log.w(TAG, "row failed", e) }
+                    Log.i(TAG, "sync: account=${accountId != null} entries=" + entries.joinToString { "${it.key}(${it.subtitle})" } + " favourites=${favourites.size}")
+                    try { syncRow(context, accountId, entries, favourites) } catch (e: Exception) { Log.w(TAG, "row failed", e) }
                     try { sync(context, accountId, entries) } catch (e: Exception) { Log.w(TAG, "watch next failed", e) }
                 }
             }
@@ -98,10 +109,12 @@ object WatchNext {
             .putExtra(EXTRA_KEY, entry.key)
             .putExtra(EXTRA_ACCOUNT, accountId)
 
-    /** Shasha's own "Continue watching" row on the home screen. */
+    private fun favouriteId(accountId: String, item: StreamItem) = "$accountId|fav:${item.type.name}:${item.id}"
+
+    /** Shasha's own row on the home screen: Continue watching, then favourites. */
     @SuppressLint("RestrictedApi")
     @RequiresApi(Build.VERSION_CODES.O)
-    private fun syncRow(context: Context, accountId: String?, entries: List<WatchEntry>) {
+    private fun syncRow(context: Context, accountId: String?, entries: List<WatchEntry>, favourites: List<StreamItem>) {
         val helper = PreviewChannelHelper(context)
         val resolver = context.contentResolver
         // Read directly: the library's channel reader crashes on a channel without a description.
@@ -116,7 +129,7 @@ object WatchNext {
             }
         }
         val channelId = found ?: run {
-            if (accountId == null || entries.isEmpty()) return
+            if (accountId == null || (entries.isEmpty() && favourites.isEmpty())) return
             val logo = ContextCompat.getDrawable(context, R.drawable.ic_launcher)?.toBitmap(320, 320) ?: return
             lastRow = null
             // The app's first (default) row is shown on the home screen without asking.
@@ -131,16 +144,17 @@ object WatchNext {
             )
         }
         Log.i(TAG, "row: channel=$channelId")
-        val row = "$accountId|" + entries.joinToString(",") { "${it.key}:${it.upNext}:${it.position / 60_000}" }
+        val row = "$accountId|" + entries.joinToString(",") { "${it.key}:${it.upNext}:${it.position / 60_000}" } +
+            "|" + favourites.joinToString(",") { "${it.type}:${it.id}" }
         if (row == lastRow) {
             Log.i(TAG, "row: unchanged")
             return
         }
-        val existing = HashMap<String, Long>()
+        val existing = LinkedHashMap<String, Long>()
         resolver.query(
             TvContractCompat.buildPreviewProgramsUriForChannel(channelId),
             arrayOf("_id", "internal_provider_id"),
-            null, null, null,
+            null, null, "_id ASC",
         )?.use { cursor ->
             while (cursor.moveToNext()) {
                 val programId = cursor.getLong(0)
@@ -149,25 +163,68 @@ object WatchNext {
                 if (id == null || existing.containsKey(id)) helper.deletePreviewProgram(programId) else existing[id] = programId
             }
         }
-        val wanted = LinkedHashMap<String, WatchEntry>()
-        if (accountId != null) for (e in entries) wanted.putIfAbsent(cardId(accountId, e), e)
-        for ((id, programId) in existing) if (id !in wanted) helper.deletePreviewProgram(programId)
-        // Most recent first (higher weight comes first). Written to the TV provider directly: the
-        // library version in use has no weight setter or in-place update.
-        var weight = wanted.size
-        for ((id, entry) in wanted) {
-            val values = previewProgram(context, channelId, accountId!!, id, entry).toContentValues()
-            values.put(android.media.tv.TvContract.PreviewPrograms.COLUMN_WEIGHT, weight--)
-            val old = existing[id]
-            if (old != null) {
-                val n = resolver.update(TvContractCompat.buildPreviewProgramUri(old), values, null, null)
-                Log.i(TAG, "row: updated $old ($id -> ${entry.subtitle}) rows=$n")
-            } else {
-                val uri = resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, values)
-                Log.i(TAG, "row: inserted $uri ($id -> ${entry.subtitle})")
+        // Cards in order: Continue watching (most recent first), then favourites.
+        val wanted = LinkedHashMap<String, PreviewProgram>()
+        if (accountId != null) {
+            for (e in entries) {
+                val id = cardId(accountId, e)
+                if (id !in wanted) wanted[id] = previewProgram(context, channelId, accountId, id, e)
+            }
+            for (f in favourites) {
+                val id = favouriteId(accountId, f)
+                if (id !in wanted) wanted[id] = favouriteProgram(context, channelId, accountId, id, f)
             }
         }
+        // Same cards in the same order: update them in place. Otherwise rebuild the row in order
+        // (some home screens show cards in the order they were added, others by weight).
+        val inPlace = existing.keys.toList() == wanted.keys.toList()
+        for ((id, programId) in existing) if (!inPlace || id !in wanted) helper.deletePreviewProgram(programId)
+        // Written to the TV provider directly: the library version in use has no weight setter
+        // or in-place update.
+        var weight = wanted.size
+        for ((id, program) in wanted) {
+            val values = program.toContentValues()
+            values.put(android.media.tv.TvContract.PreviewPrograms.COLUMN_WEIGHT, weight--)
+            val old = existing[id]
+            if (inPlace && old != null) {
+                resolver.update(TvContractCompat.buildPreviewProgramUri(old), values, null, null)
+            } else {
+                resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, values)
+            }
+        }
+        Log.i(TAG, "row: ${wanted.size} cards (${entries.size} continue, ${favourites.size} favourites), ${if (inPlace) "updated" else "rebuilt"}")
         lastRow = row
+    }
+
+    /** A favourite: a channel plays, a film plays (from where it was left), a series carries on. */
+    @SuppressLint("RestrictedApi")
+    private fun favouriteProgram(context: Context, channelId: Long, accountId: String, id: String, item: StreamItem): PreviewProgram {
+        val builder = PreviewProgram.Builder()
+        builder.setChannelId(channelId)
+            .setType(
+                when (item.type) {
+                    ContentType.LIVE -> TvContractCompat.PreviewProgramColumns.TYPE_CHANNEL
+                    ContentType.MOVIE -> TvContractCompat.PreviewProgramColumns.TYPE_MOVIE
+                    ContentType.SERIES -> TvContractCompat.PreviewProgramColumns.TYPE_TV_SERIES
+                },
+            )
+            .setTitle(item.name)
+            .setInternalProviderId(id)
+            .setIntent(
+                openApp(context)
+                    .setAction(ACTION_OPEN)
+                    .putExtra(EXTRA_TYPE, item.type.name)
+                    .putExtra(EXTRA_ID, item.id)
+                    .putExtra(EXTRA_ACCOUNT, accountId),
+            )
+        builder.setPosterArtAspectRatio(
+            if (item.type == ContentType.LIVE) TvContractCompat.PreviewProgramColumns.ASPECT_RATIO_16_9
+            else TvContractCompat.PreviewProgramColumns.ASPECT_RATIO_2_3,
+        )
+        item.icon?.takeIf { it.isNotBlank() }?.let { runCatching { builder.setPosterArtUri(Uri.parse(it)) } }
+        builder.setLastPlaybackPositionMillis(0)
+        builder.setDurationMillis(0)
+        return builder.build()
     }
 
     @SuppressLint("RestrictedApi")

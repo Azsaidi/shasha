@@ -312,4 +312,12 @@
     <string name="sound_tame">تهدئة النغمات الحادة</string>
     <string name="sound_reset">العودة إلى «أوضح»</string>
     <string name="sound_hint">تُطبَّق التغييرات فور تحريكها وتُحفظ لهذا المسلسل أو الفيلم أو القناة.</string>
+    <string name="sort_fav_newest">المضافة حديثًا</string>
+    <string name="sort_fav_oldest">المضافة أولًا</string>
+    <string name="home_rows">صفوف الشاشة الرئيسية</string>
+    <string name="home_rows_hint">اختر ترتيب الصفوف في الرئيسية.</string>
+    <string name="arrange_home_rows">ترتيب صفوف الرئيسية</string>
+    <string name="move_up">نقل لأعلى</string>
+    <string name="move_down">نقل لأسفل</string>
+    <string name="reset_order">إعادة الترتيب الافتراضي</string>
 </resources>

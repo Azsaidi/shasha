@@ -92,6 +92,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -103,7 +104,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.ui.focus.FocusRequester
+import com.azsaidi.shasha.data.FavouriteSort
+import com.azsaidi.shasha.data.HomeLayout
+import com.azsaidi.shasha.data.HomeRow
+import com.azsaidi.shasha.data.sortedFavourites
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -133,6 +142,8 @@ import com.azsaidi.shasha.player.MultiView
 import com.azsaidi.shasha.player.Playback
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import androidx.compose.foundation.focusGroup
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -206,9 +217,48 @@ fun HomeScreen(
     val isTv = rememberIsTv()
     val wide = isTv || LocalConfiguration.current.screenWidthDp >= 600
     val railFocus = remember { FocusRequester() }
+    var railFocused by remember { mutableStateOf(false) }
+    // TV: if the focused item goes away (removed, lists reloaded), focus goes back into the page
+    // instead of being left on nothing (the next press then landed on the side menu).
+    val contentFocus = remember { FocusRequester() }
+    var contentFocused by remember { mutableStateOf(false) }
+    val focusScope = rememberCoroutineScope()
+
+    // TV: Back from a page goes to the side menu, then to Home, and only then leaves the app
+    // (it used to leave the app straight away from anywhere).
+    if (isTv && wide) {
+        BackHandler(enabled = !(railFocused && tab == HomeTab.HOME)) {
+            if (railFocused) {
+                tab = HomeTab.HOME
+            } else {
+                runCatching { railFocus.requestFocus() }
+            }
+        }
+    }
 
     val content: @Composable () -> Unit = {
-        Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .then(
+                    if (isTv) {
+                        Modifier
+                            .focusRequester(contentFocus)
+                            .onFocusChanged { state ->
+                                val had = contentFocused
+                                contentFocused = state.hasFocus
+                                if (had && !state.hasFocus) focusScope.launch {
+                                    // Give a deliberate move (to the side menu, a neighbour) time to land.
+                                    delay(300)
+                                    if (!contentFocused && !railFocused) runCatching { contentFocus.requestFocus() }
+                                }
+                            }
+                            .focusGroup()
+                    } else {
+                        Modifier
+                    },
+                )
+        ) {
             OfflineBanner(showButton = tab != HomeTab.DOWNLOADS) { tab = HomeTab.DOWNLOADS }
             RefreshBanner()
             SplitScreenBanner()
@@ -243,6 +293,7 @@ fun HomeScreen(
                     .padding(horizontal = if (isTv) 12.dp else 0.dp)
             ) {
                 NavigationRail(
+                    modifier = Modifier.onFocusChanged { railFocused = it.hasFocus },
                     header = {
                         Image(
                             painter = painterResource(R.drawable.ic_logo),
@@ -535,6 +586,8 @@ private fun Browser(
     val scope = rememberCoroutineScope()
     val memory = rememberFocusMemory("browser-${type.name}")
     val noun = stringResource(type.nounRes)
+    // TV: up from the list goes to Search, not to whichever button is nearest (often Refresh).
+    val searchFocus = remember { FocusRequester() }
 
     val sortOptions = if (type == ContentType.LIVE) {
         listOf(SortOrder.DEFAULT, SortOrder.NAME, SortOrder.NAME_DESC, SortOrder.FAVOURITES)
@@ -590,7 +643,9 @@ private fun Browser(
                         onClick = { showSearch = true },
                         label = { Text(query.ifEmpty { stringResource(R.string.search) }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                        modifier = Modifier.focusRing(RoundedCornerShape(8.dp)),
+                        modifier = Modifier
+                            .focusRequester(searchFocus)
+                            .focusRing(RoundedCornerShape(8.dp)),
                     )
                 }
                 if (query.isNotEmpty()) {
@@ -642,7 +697,7 @@ private fun Browser(
                 if (items.isEmpty()) null else stringResource(R.string.try_different),
             )
         } else if (type == ContentType.LIVE) {
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().upExitTo(if (isTv) searchFocus else null)) {
                 items(filtered) { item -> LiveRow(item, memory) { openItem(item) } }
             }
         } else {
@@ -653,7 +708,7 @@ private fun Browser(
                 // Room around each poster so the focused one can grow without covering others.
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().upExitTo(if (isTv) searchFocus else null),
             ) {
                 items(filtered.size) { index ->
                     val item = filtered[index]
@@ -908,7 +963,7 @@ private fun CategoryRow(name: String, count: Int, selected: Boolean, onClick: ()
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun LiveRow(item: StreamItem, memory: FocusMemory? = null, onClick: () -> Unit) {
+internal fun LiveRow(item: StreamItem, memory: FocusMemory? = null, onUnfavourite: (() -> Unit)? = null, onClick: () -> Unit) {
     val context = LocalContext.current
     val favorite = Session.isFavorite(item)
     val rowFocus = remember { FocusRequester() }
@@ -919,7 +974,10 @@ internal fun LiveRow(item: StreamItem, memory: FocusMemory? = null, onClick: () 
         leadingContent = { Thumb(item.icon, item.name, Modifier.size(width = 64.dp, height = 44.dp)) },
         trailingContent = {
             IconButton(
-                onClick = { Session.toggleFavorite(item) },
+                onClick = {
+                    if (favorite) onUnfavourite?.invoke()
+                    Session.toggleFavorite(item)
+                },
                 modifier = Modifier
                     .focusRequester(starFocus)
                     .focusProperties { start = rowFocus }
@@ -944,10 +1002,15 @@ internal fun LiveRow(item: StreamItem, memory: FocusMemory? = null, onClick: () 
                     onClick()
                 },
                 onLongClick = {
-                    showStreamItemMenu(context, item) {
-                        memory?.opened(key)
-                        onClick()
-                    }
+                    showStreamItemMenu(
+                        context,
+                        item,
+                        onOpen = {
+                            memory?.opened(key)
+                            onClick()
+                        },
+                        onUnfavourite = onUnfavourite,
+                    )
                 },
             ),
     )
@@ -959,6 +1022,7 @@ internal fun PosterCard(
     item: StreamItem,
     modifier: Modifier = Modifier,
     memory: FocusMemory? = null,
+    onUnfavourite: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -975,10 +1039,15 @@ internal fun PosterCard(
                     onClick()
                 },
                 onLongClick = {
-                    showStreamItemMenu(context, item) {
-                        memory?.opened(key)
-                        onClick()
-                    }
+                    showStreamItemMenu(
+                        context,
+                        item,
+                        onOpen = {
+                            memory?.opened(key)
+                            onClick()
+                        },
+                        onUnfavourite = onUnfavourite,
+                    )
                 },
             )
             .padding(4.dp)
@@ -1033,8 +1102,12 @@ internal fun PosterCard(
 
 @Composable
 private fun FavouritesTab(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
-    val favourites = Session.favorites.toList()
+    val isTv = rememberIsTv()
+    val sort = HomeLayout.favouriteSort
+    val favourites = Session.favorites.toList().sortedFavourites(sort)
     val memory = rememberFocusMemory("favourites")
+    val sortFocus = remember { FocusRequester() }
+    var showSort by remember { mutableStateOf(false) }
     if (favourites.isEmpty()) {
         MessageView(stringResource(R.string.no_favourites), stringResource(R.string.no_favourites_hint))
         return
@@ -1043,28 +1116,188 @@ private fun FavouritesTab(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
     val movies = favourites.filter { it.type == ContentType.MOVIE }
     val series = favourites.filter { it.type == ContentType.SERIES }
     val channelsTitle = stringResource(R.string.tab_live)
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
-        if (movies.isNotEmpty()) {
-            shelf(R.string.tab_movies) {
-                items(movies, key = { "m-${it.id}" }) { item ->
-                    PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, movies) }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = if (isTv) 8.dp else 4.dp)) {
+            FilterChip(
+                selected = sort != FavouriteSort.NAME,
+                onClick = { showSort = true },
+                label = { Text(stringResource(sort.label), maxLines = 1) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                modifier = Modifier
+                    .focusRequester(sortFocus)
+                    .focusRing(RoundedCornerShape(8.dp)),
+            )
+        }
+        LazyColumn(
+            Modifier.fillMaxSize().upExitTo(if (isTv) sortFocus else null),
+            contentPadding = PaddingValues(bottom = 24.dp),
+        ) {
+            if (movies.isNotEmpty()) {
+                val keys = movies.map { "${it.type.name}-${it.id}" }
+                shelf(R.string.tab_movies) {
+                    items(movies, key = { "m-${it.id}" }) { item ->
+                        PosterCard(
+                            item,
+                            Modifier.width(118.dp),
+                            memory,
+                            onUnfavourite = { memory.moveTo(neighbourKey(keys, "${item.type.name}-${item.id}")) },
+                        ) { onOpen(item, movies) }
+                    }
                 }
             }
-        }
-        if (series.isNotEmpty()) {
-            shelf(R.string.tab_series) {
-                items(series, key = { "s-${it.id}" }) { item ->
-                    PosterCard(item, Modifier.width(118.dp), memory) { onOpen(item, series) }
+            if (series.isNotEmpty()) {
+                val keys = series.map { "${it.type.name}-${it.id}" }
+                shelf(R.string.tab_series) {
+                    items(series, key = { "s-${it.id}" }) { item ->
+                        PosterCard(
+                            item,
+                            Modifier.width(118.dp),
+                            memory,
+                            onUnfavourite = { memory.moveTo(neighbourKey(keys, "${item.type.name}-${item.id}")) },
+                        ) { onOpen(item, series) }
+                    }
                 }
             }
-        }
-        if (channels.isNotEmpty()) {
-            item(key = "channels-title") { SectionTitle(channelsTitle) }
-            items(channels, key = { "c-${it.id}" }) { item ->
-                LiveRow(item, memory) { onOpen(item, channels) }
+            if (channels.isNotEmpty()) {
+                val keys = channels.map { "live-${it.id}" }
+                item(key = "channels-title") { SectionTitle(channelsTitle) }
+                items(channels, key = { "c-${it.id}" }) { item ->
+                    LiveRow(
+                        item,
+                        memory,
+                        onUnfavourite = { memory.moveTo(neighbourKey(keys, "live-${item.id}")) },
+                    ) { onOpen(item, channels) }
+                }
             }
         }
     }
+    if (showSort) {
+        ChoiceDialog(
+            title = stringResource(R.string.sort_by),
+            options = FavouriteSort.entries.map { it to stringResource(it.label) },
+            selected = sort,
+            onSelect = {
+                HomeLayout.setFavouriteSort(it)
+                showSort = false
+            },
+            onDismiss = { showSort = false },
+        )
+    }
+}
+
+/** A list of choices with the current one marked (focus starts on it). */
+@Composable
+internal fun <T> ChoiceDialog(
+    title: String,
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val selectedFocus = remember { FocusRequester() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                options.forEach { (value, label) ->
+                    val isSelected = value == selected
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .then(if (isSelected) Modifier.focusRequester(selectedFocus) else Modifier)
+                            .focusRing(RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onSelect(value) }
+                            .padding(horizontal = 8.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = isSelected, onClick = null)
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            label,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) {
+                Text(stringResource(R.string.close))
+            }
+        },
+    )
+    LaunchedEffect(Unit) { runCatching { selectedFocus.requestFocus() } }
+}
+
+/**
+ * Arrange the Home rows: each row with Move up / Move down. Focus stays on the button that was
+ * pressed as the row moves, so a row can be walked up or down with repeated presses.
+ */
+@Composable
+private fun HomeRowsDialog(onDismiss: () -> Unit) {
+    val rows = HomeLayout.rows
+    val firstFocus = remember { FocusRequester() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.home_rows)) },
+        text = {
+            Column {
+                Text(
+                    stringResource(R.string.home_rows_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                rows.forEachIndexed { index, row ->
+                    key(row) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "${index + 1}.  " + stringResource(row.title),
+                                modifier = Modifier.weight(1f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            IconButton(
+                                onClick = { HomeLayout.move(row, -1) },
+                                enabled = index > 0,
+                                modifier = Modifier
+                                    .then(if (index == 0) Modifier else if (index == 1) Modifier.focusRequester(firstFocus) else Modifier)
+                                    .focusRing(CircleShape),
+                            ) {
+                                Icon(Icons.Filled.ArrowUpward, contentDescription = stringResource(R.string.move_up))
+                            }
+                            IconButton(
+                                onClick = { HomeLayout.move(row, 1) },
+                                enabled = index < rows.lastIndex,
+                                modifier = Modifier.focusRing(CircleShape),
+                            ) {
+                                Icon(Icons.Filled.ArrowDownward, contentDescription = stringResource(R.string.move_down))
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) {
+                Text(stringResource(R.string.close))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { HomeLayout.reset() }, modifier = Modifier.focusRing(RoundedCornerShape(20.dp))) {
+                Text(stringResource(R.string.reset_order))
+            }
+        },
+    )
+    LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
 }
 
 @Composable
@@ -1098,6 +1331,7 @@ private fun SettingsTab(
     var showPassword by remember { mutableStateOf(false) }
     var autoRefresh by remember { mutableIntStateOf(Store.autoRefreshDays) }
     var confirmClearSearches by remember { mutableStateOf(false) }
+    var arrangeRows by remember { mutableStateOf(false) }
 
     Column(
         Modifier
@@ -1235,6 +1469,18 @@ private fun SettingsTab(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        Text(stringResource(R.string.home_rows), style = MaterialTheme.typography.titleSmall)
+        OutlinedButton(onClick = { arrangeRows = true }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
+            Icon(Icons.Filled.ViewAgenda, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.arrange_home_rows))
+        }
+        Text(
+            HomeLayout.rows.joinToString(" · ") { context.getString(it.title) },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
         Text(stringResource(R.string.history_section), style = MaterialTheme.typography.titleSmall)
         OutlinedButton(onClick = { confirmClearHistory = true }, modifier = Modifier.fillMaxWidth().focusRing(ButtonShape)) {
             Icon(Icons.Filled.History, contentDescription = null)
@@ -1275,6 +1521,8 @@ private fun SettingsTab(
             modifier = Modifier.align(Alignment.CenterHorizontally),
         )
     }
+
+    if (arrangeRows) HomeRowsDialog { arrangeRows = false }
 
     if (confirmClearHistory) {
         ConfirmDialog(
