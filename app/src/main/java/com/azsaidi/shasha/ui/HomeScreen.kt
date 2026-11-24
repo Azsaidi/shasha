@@ -226,6 +226,8 @@ fun HomeScreen(
     val contentFocus = remember { FocusRequester() }
     var contentFocused by remember { mutableStateOf(false) }
     val pageTop = remember { PageTop() }
+    // The tab whose focused item was remembered when leaving for the side menu.
+    var savedTab by remember { mutableStateOf<HomeTab?>(null) }
     val focusScope = rememberCoroutineScope()
 
     // TV: Back from a page goes to the side menu, then to Home, and only then leaves the app
@@ -236,7 +238,7 @@ fun HomeScreen(
                 tab = HomeTab.HOME
             } else {
                 // Remember the item, so coming back from the side menu lands on it again.
-                runCatching { contentFocus.saveFocusedChild() }
+                if (runCatching { contentFocus.saveFocusedChild() }.getOrDefault(false)) savedTab = tab
                 runCatching { railFocus.requestFocus() }
             }
         }
@@ -266,12 +268,23 @@ fun HomeScreen(
                             // app ("Release should only be called once").
                             .focusProperties {
                                 exit = {
-                                    runCatching { contentFocus.saveFocusedChild() }
+                                    if (runCatching { contentFocus.saveFocusedChild() }.getOrDefault(false)) savedTab = tab
                                     FocusRequester.Default
                                 }
                                 enter = {
-                                    if (runCatching { contentFocus.restoreFocusedChild() }.getOrDefault(false)) FocusRequester.Cancel
-                                    else pageTop.target()
+                                    if (savedTab == tab) {
+                                        // Restored just after this move: a focus request made
+                                        // inside it was cancelled with it (nothing ended up focused).
+                                        focusScope.launch {
+                                            if (!runCatching { contentFocus.restoreFocusedChild() }.getOrDefault(false)) {
+                                                savedTab = null
+                                                runCatching { pageTop.target().takeIf { it != FocusRequester.Default }?.requestFocus() ?: contentFocus.requestFocus() }
+                                            }
+                                        }
+                                        FocusRequester.Cancel
+                                    } else {
+                                        pageTop.target()
+                                    }
                                 }
                             }
                             .focusGroup()
