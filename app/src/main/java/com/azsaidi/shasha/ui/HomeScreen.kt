@@ -144,6 +144,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.focusRestorer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -191,6 +193,7 @@ internal fun toggleFavouriteWithToast(context: Context, item: StreamItem) {
     Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun HomeScreen(
     onOpenMovie: (String) -> Unit,
@@ -253,6 +256,10 @@ fun HomeScreen(
                                     if (!contentFocused && !railFocused) runCatching { contentFocus.requestFocus() }
                                 }
                             }
+                            // Coming back from the side menu: the item that had focus on this
+                            // page, or else the top of the page (not whatever is level with the
+                            // menu button, which was the middle of Settings or Favourites).
+                            .focusRestorer()
                             .focusGroup()
                     } else {
                         Modifier
@@ -311,6 +318,8 @@ fun HomeScreen(
                             label = { Text(stringResource(t.label), maxLines = 1) },
                             modifier = Modifier
                                 .then(if (t == tab) Modifier.focusRequester(railFocus) else Modifier)
+                                // Into the page (towards the content, on either side in Arabic).
+                                .focusProperties { if (isTv) end = contentFocus }
                                 .focusRing(RoundedCornerShape(16.dp)),
                         )
                     }
@@ -900,6 +909,17 @@ private fun CategoryDialog(
         val f = filter.trim()
         if (f.isEmpty()) categories else categories.filter { it.first.name.contains(f, ignoreCase = true) }
     }
+    val listState = rememberLazyListState()
+    val selectedFocus = remember { FocusRequester() }
+    // Row of the selected category ("All ..." is the first row).
+    val selectedRow = remember { if (selected.isEmpty()) 0 else categories.indexOfFirst { it.first.id == selected } + 1 }
+    LaunchedEffect(Unit) {
+        runCatching { listState.scrollToItem(maxOf(selectedRow, 0)) }
+        repeat(10) {
+            if (runCatching { selectedFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+            delay(50)
+        }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
@@ -920,12 +940,13 @@ private fun CategoryDialog(
                     )
                     Spacer(Modifier.size(8.dp))
                 }
-                LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                LazyColumn(Modifier.heightIn(max = 420.dp), state = listState) {
                     if (filter.isBlank()) {
-                        item { CategoryRow(allLabel, total, selected.isEmpty()) { onSelect("") } }
+                        item { CategoryRow(allLabel, total, selected.isEmpty(), if (selected.isEmpty()) selectedFocus else null) { onSelect("") } }
                     }
                     items(shown) { (category, count) ->
-                        CategoryRow(category.name, count, selected == category.id) { onSelect(category.id) }
+                        val isSelected = selected == category.id
+                        CategoryRow(category.name, count, isSelected, if (isSelected) selectedFocus else null) { onSelect(category.id) }
                     }
                 }
             }
@@ -934,11 +955,12 @@ private fun CategoryDialog(
 }
 
 @Composable
-private fun CategoryRow(name: String, count: Int, selected: Boolean, onClick: () -> Unit) {
+private fun CategoryRow(name: String, count: Int, selected: Boolean, focus: FocusRequester? = null, onClick: () -> Unit) {
     val color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
     Row(
         Modifier
             .fillMaxWidth()
+            .then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
             .focusRing(RoundedCornerShape(8.dp))
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
@@ -1177,7 +1199,7 @@ private fun FavouritesTab(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
             options = FavouriteSort.entries.map { it to stringResource(it.label) },
             selected = sort,
             onSelect = {
-                HomeLayout.setFavouriteSort(it)
+                HomeLayout.sortFavouritesBy(it)
                 showSort = false
             },
             onDismiss = { showSort = false },

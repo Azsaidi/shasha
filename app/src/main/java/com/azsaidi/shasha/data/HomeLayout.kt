@@ -62,7 +62,7 @@ object HomeLayout {
         Store.homeRows = list.joinToString(",") { it.name }
     }
 
-    fun setFavouriteSort(sort: FavouriteSort) {
+    fun sortFavouritesBy(sort: FavouriteSort) {
         favouriteSort = sort
         Store.favouriteSort = sort.name
         WatchNext.requestSync()
