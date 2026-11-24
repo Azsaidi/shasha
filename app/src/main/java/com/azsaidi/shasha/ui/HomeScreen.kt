@@ -304,7 +304,11 @@ fun HomeScreen(
                     .padding(horizontal = if (isTv) 12.dp else 0.dp)
             ) {
                 NavigationRail(
-                    modifier = Modifier.onFocusChanged { railFocused = it.hasFocus },
+                    modifier = Modifier
+                        .onFocusChanged { railFocused = it.hasFocus }
+                        // Left from the page lands on the current tab (it went to whatever
+                        // button was level, e.g. Home from the top of Settings).
+                        .then(if (isTv) Modifier.focusProperties { enter = { railFocus } }.focusGroup() else Modifier),
                     header = {
                         Image(
                             painter = painterResource(R.drawable.ic_logo),
