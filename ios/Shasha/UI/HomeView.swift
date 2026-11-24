@@ -7,6 +7,7 @@ enum HomeRoute: Hashable {
 
 struct HomeView: View {
     @ObservedObject private var session = Session.shared
+    @ObservedObject private var layout = HomeLayout.shared
     @State private var newMovies: [StreamItem] = []
     @State private var newSeries: [StreamItem] = []
 
@@ -30,66 +31,9 @@ struct HomeView: View {
 
                 ExpiryBanner()
 
-                let resume = session.continueWatching
-                if !resume.isEmpty {
-                    shelf(L("continue_watching")) {
-                        ForEach(resume) { entry in
-                            Button { Actions.play(entry) } label: {
-                                WideCard(title: entry.title, subtitle: entry.displaySubtitle, image: entry.image,
-                                         progress: entry.progress, badge: entry.upNext ? L("up_next") : nil)
-                                    .frame(width: 220)
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu { HistoryMenu(entry: entry, onOpen: { AppNav.shared.homePath.append(page(for: entry)) }) }
-                        }
-                    }
-                }
-
-                let recent = session.recentChannels
-                if !recent.isEmpty {
-                    shelf(L("recent_channels")) {
-                        ForEach(Array(recent.enumerated()), id: \.element.id) { i, entry in
-                            Button { Playback.recentChannels(recent, index: i) } label: {
-                                ChannelCard(title: entry.title, image: entry.image,
-                                            favourite: session.favouriteUids.contains("\(ContentType.live.rawValue):\(entry.streamId)"))
-                                    .frame(width: 130)
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu { HistoryMenu(entry: entry) }
-                        }
-                    }
-                }
-
-                let channels = session.favourites.filter { $0.type == .live }
-                if !channels.isEmpty {
-                    shelf(L("favourite_channels")) {
-                        ForEach(channels) { item in
-                            Button { Actions.open(item, list: channels) } label: {
-                                ChannelCard(title: item.name, image: item.icon).frame(width: 130)
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu { StreamItemMenu(item: item, list: channels) }
-                        }
-                    }
-                }
-
-                let vod = session.favourites.filter { $0.type != .live }
-                if !vod.isEmpty {
-                    shelf(L("favourite_vod")) {
-                        ForEach(vod) { item in posterLink(item) }
-                    }
-                }
-
-                if !newMovies.isEmpty {
-                    shelf(L("new_movies"), seeAll: { AppNav.shared.tab = .movies }) {
-                        ForEach(newMovies) { item in posterLink(item) }
-                    }
-                }
-
-                if !newSeries.isEmpty {
-                    shelf(L("new_series"), seeAll: { AppNav.shared.tab = .series }) {
-                        ForEach(newSeries) { item in posterLink(item) }
-                    }
+                // In the order chosen in Settings (favourites after Continue watching by default).
+                ForEach(layout.rows) { row in
+                    rowView(row)
                 }
             }
             .padding(.vertical, 8)
@@ -119,6 +63,74 @@ struct HomeView: View {
         .task(id: session.cacheVersion) { await loadNew() }
         .task(id: session.hideAdult) { await loadNew() }
         .refreshable { session.refreshAll() }
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: HomeRow) -> some View {
+        switch row {
+        case .continueWatching:
+            let resume = session.continueWatching
+            if !resume.isEmpty {
+                shelf(L("continue_watching")) {
+                    ForEach(resume) { entry in
+                        Button { Actions.play(entry) } label: {
+                            WideCard(title: entry.title, subtitle: entry.displaySubtitle, image: entry.image,
+                                     progress: entry.progress, badge: entry.upNext ? L("up_next") : nil)
+                                .frame(width: 220)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu { HistoryMenu(entry: entry, onOpen: { AppNav.shared.homePath.append(page(for: entry)) }) }
+                    }
+                }
+            }
+        case .recentChannels:
+            let recent = session.recentChannels
+            if !recent.isEmpty {
+                shelf(L("recent_channels")) {
+                    ForEach(Array(recent.enumerated()), id: \.element.id) { i, entry in
+                        Button { Playback.recentChannels(recent, index: i) } label: {
+                            ChannelCard(title: entry.title, image: entry.image,
+                                        favourite: session.favouriteUids.contains("\(ContentType.live.rawValue):\(entry.streamId)"))
+                                .frame(width: 130)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu { HistoryMenu(entry: entry) }
+                    }
+                }
+            }
+        case .favouriteChannels:
+            let channels = session.favourites.filter { $0.type == .live }.sortedFavourites(layout.favouriteSort)
+            if !channels.isEmpty {
+                shelf(L("favourite_channels")) {
+                    ForEach(channels) { item in
+                        Button { Actions.open(item, list: channels) } label: {
+                            ChannelCard(title: item.name, image: item.icon).frame(width: 130)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu { StreamItemMenu(item: item, list: channels) }
+                    }
+                }
+            }
+        case .favouriteVod:
+            let vod = session.favourites.filter { $0.type != .live }.sortedFavourites(layout.favouriteSort)
+            if !vod.isEmpty {
+                shelf(L("favourite_vod")) {
+                    ForEach(vod) { item in posterLink(item) }
+                }
+            }
+        case .newMovies:
+            if !newMovies.isEmpty {
+                shelf(L("new_movies"), seeAll: { AppNav.shared.tab = .movies }) {
+                    ForEach(newMovies) { item in posterLink(item) }
+                }
+            }
+        case .newSeries:
+            if !newSeries.isEmpty {
+                shelf(L("new_series"), seeAll: { AppNav.shared.tab = .series }) {
+                    ForEach(newSeries) { item in posterLink(item) }
+                }
+            }
+        }
     }
 
     private func posterLink(_ item: StreamItem) -> some View {

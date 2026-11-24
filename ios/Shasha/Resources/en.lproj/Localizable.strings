@@ -281,3 +281,9 @@
 "sound_tame" = "Tame high notes";
 "sound_reset" = "Reset to Clearer";
 "sound_hint" = "Changes apply as you move them and are saved for this series, film or channel.";
+"sort_fav_newest" = "Recently favourited";
+"sort_fav_oldest" = "First favourited";
+"home_rows" = "Home screen rows";
+"home_rows_hint" = "Drag the rows into the order you want on Home.";
+"arrange_home_rows" = "Arrange Home rows";
+"reset_order" = "Reset order";

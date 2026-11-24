@@ -33,16 +33,34 @@ struct LibraryView: View {
 
 private struct FavouritesList: View {
     @ObservedObject private var session = Session.shared
+    @ObservedObject private var layout = HomeLayout.shared
 
     var body: some View {
-        let channels = session.favourites.filter { $0.type == .live }
-        let vod = session.favourites.filter { $0.type != .live }
+        let sorted = session.favourites.sortedFavourites(layout.favouriteSort)
+        let channels = sorted.filter { $0.type == .live }
+        let vod = sorted.filter { $0.type != .live }
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
                 Banners()
                 if channels.isEmpty && vod.isEmpty {
                     EmptyState(icon: "star", title: L("no_favourites"), message: L("no_favourites_hint"))
                         .padding(.top, 40)
+                } else {
+                    // A–Z by default; also Z–A, recently or first favourited.
+                    Menu {
+                        Picker(L("sort_by"), selection: Binding(get: { layout.favouriteSort }, set: { layout.sortFavourites(by: $0) })) {
+                            ForEach(FavouriteSort.allCases) { sort in
+                                Text(L(sort.labelKey)).tag(sort)
+                            }
+                        }
+                    } label: {
+                        Label(L(layout.favouriteSort.labelKey), systemImage: "arrow.up.arrow.down")
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(Theme.card, in: Capsule())
+                    }
+                    .padding(.horizontal, 16)
                 }
                 if !channels.isEmpty {
                     Text(L("favourite_channels")).font(.title3.bold()).padding(.horizontal, 16)

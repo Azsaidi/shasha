@@ -120,6 +120,18 @@ struct SettingsView: View {
                     Text(L("auto_refresh_desc"))
                 }
 
+                Section {
+                    NavigationLink {
+                        HomeRowsView()
+                    } label: {
+                        Label(L("arrange_home_rows"), systemImage: "rectangle.grid.1x2")
+                    }
+                } header: {
+                    Text(L("home_rows"))
+                } footer: {
+                    Text(HomeLayout.shared.rows.map { L($0.titleKey) }.joined(separator: " · "))
+                }
+
                 Section(L("history_section")) {
                     Button(role: .destructive) { confirmHistory = true } label: {
                         Label(L("clear_watch_history"), systemImage: "clock.arrow.circlepath")
@@ -201,5 +213,29 @@ struct SettingsView: View {
                 .textSelection(.enabled)
                 .environment(\.layoutDirection, ltr ? .leftToRight : l10n.layoutDirection)
         }
+    }
+}
+
+/// Drag the Home rows into the order you want.
+struct HomeRowsView: View {
+    @ObservedObject private var layout = HomeLayout.shared
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(layout.rows) { row in
+                    Text(L(row.titleKey))
+                }
+                .onMove { layout.move(from: $0, to: $1) }
+            } footer: {
+                Text(L("home_rows_hint"))
+            }
+            Section {
+                Button(L("reset_order")) { layout.reset() }
+            }
+        }
+        .environment(\.editMode, .constant(.active))
+        .navigationTitle(L("home_rows"))
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
