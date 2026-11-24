@@ -13,6 +13,10 @@ public sealed class Settings
     public bool HideAdult { get; set; } = true;
     public int AutoRefreshDays { get; set; } = 7;
     public Dictionary<string, string> Sorts { get; set; } = new();
+    /// <summary>Home row order (HomeRow names); null means the default order.</summary>
+    public List<string>? HomeRows { get; set; }
+    /// <summary>How favourites are listed (a FavouriteSort name); null means A–Z.</summary>
+    public string? FavouriteSort { get; set; }
     /// <summary>"Clearer sound" level per series/film/channel.</summary>
     public Dictionary<string, int> Clarity { get; set; } = new();
     /// <summary>The Sound sliders per series/film/channel; null means off.</summary>

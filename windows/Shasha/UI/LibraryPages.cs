@@ -14,15 +14,45 @@ public sealed class FavouritesPage : Page
     {
         Content = new ScrollViewer { Content = _col, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         Session.FavouritesChanged += Build;
+        HomeLayout.Changed += Build;
         Build();
     }
 
-    public override void Closed() => Session.FavouritesChanged -= Build;
+    public override void Closed()
+    {
+        Session.FavouritesChanged -= Build;
+        HomeLayout.Changed -= Build;
+    }
 
     void Build()
     {
         _col.Children.Clear();
-        _col.Children.Add(Kit.Text(L("tab_favourites"), "H1"));
+        var title = Kit.Text(L("tab_favourites"), "H1");
+        if (Session.Favourites.Count == 0)
+        {
+            _col.Children.Add(title);
+        }
+        else
+        {
+            // A–Z by default; also Z–A, recently or first favourited.
+            var current = HomeLayout.FavouriteSort;
+            Button? sortButton = null;
+            sortButton = Kit.Button(L(HomeLayout.LabelKey(current)), () =>
+            {
+                var menu = Kit.Menu(Enum.GetValues<FavouriteSort>().Select(s =>
+                    ((string, string, Action)?)(s == current ? "\uE73E" : "", L(HomeLayout.LabelKey(s)), () => HomeLayout.SortFavouritesBy(s))).ToArray());
+                menu.PlacementTarget = sortButton;
+                menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+                menu.IsOpen = true;
+            }, glyph: "\uE8CB");
+            sortButton.ToolTip = L("sort_by");
+            sortButton.VerticalAlignment = VerticalAlignment.Center;
+            var header = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(sortButton, Dock.Right);
+            header.Children.Add(sortButton);
+            header.Children.Add(title);
+            _col.Children.Add(header);
+        }
         if (Session.Favourites.Count == 0)
         {
             var m = Kit.Message("\uE734", L("no_favourites"), L("no_favourites_hint_win"));
@@ -30,9 +60,10 @@ public sealed class FavouritesPage : Page
             _col.Children.Add(m);
             return;
         }
-        var channels = Session.Favourites.Where(f => f.Type == ContentType.Live).ToList();
+        var sorted = Session.Favourites.SortedFavourites();
+        var channels = sorted.Where(f => f.Type == ContentType.Live).ToList();
         if (channels.Count > 0) AddGroup(L("favourite_channels"), "ChannelTileTemplate", channels, channels);
-        var vod = Session.Favourites.Where(f => f.Type != ContentType.Live).ToList();
+        var vod = sorted.Where(f => f.Type != ContentType.Live).ToList();
         if (vod.Count > 0) AddGroup(L("favourite_vod"), "PosterTemplate", vod, null);
     }
 

@@ -14,10 +14,15 @@ public sealed class SettingsPage : Page
     {
         Content = new ScrollViewer { Content = _col, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         Session.AccountChanged += Build;
+        HomeLayout.Changed += Build;
         Build();
     }
 
-    public override void Closed() => Session.AccountChanged -= Build;
+    public override void Closed()
+    {
+        Session.AccountChanged -= Build;
+        HomeLayout.Changed -= Build;
+    }
 
     StackPanel Section(string title)
     {
@@ -80,6 +85,15 @@ public sealed class SettingsPage : Page
                 Restart();
             }));
 
+        // Home rows
+        var r = Section(L("home_rows"));
+        var hint = Kit.Text(L("home_rows_hint"), "Caption", wrap: true);
+        hint.Margin = new Thickness(10, 4, 10, 6);
+        r.Children.Add(hint);
+        var rows = HomeLayout.Rows;
+        for (var i = 0; i < rows.Count; i++) r.Children.Add(HomeRowLine(rows[i], i, rows.Count));
+        r.Children.Add(Kit.SettingRow("\uE72C", L("reset_order"), null, HomeLayout.Reset));
+
         // Downloads
         var d = Section(L("tab_downloads"));
         d.Children.Add(Kit.SettingRow("\uE8B7", L("downloads_folder"), Store.DownloadsFolder, ChangeFolder));
@@ -109,6 +123,30 @@ public sealed class SettingsPage : Page
         var keys = Kit.Text(L("keyboard_hint"), "Caption", wrap: true);
         keys.Margin = new Thickness(10, 8, 10, 8);
         u.Children.Add(keys);
+    }
+
+    /// <summary>One Home row with Move up / Move down buttons.</summary>
+    static FrameworkElement HomeRowLine(HomeRow row, int index, int count)
+    {
+        var grid = new Grid { Margin = new Thickness(6, 4, 6, 4) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var number = Kit.Text((index + 1).ToString(L10n.Culture), "Caption", size: 14);
+        number.VerticalAlignment = VerticalAlignment.Center;
+        grid.Children.Add(number);
+        var t = Kit.Text(L(HomeLayout.TitleKey(row)), size: 14);
+        t.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(t, 1);
+        grid.Children.Add(t);
+        var up = Kit.IconButton("\uE70E", L("move_up"), () => HomeLayout.Move(row, -1));
+        up.IsEnabled = index > 0;
+        var down = Kit.IconButton("\uE70D", L("move_down"), () => HomeLayout.Move(row, 1));
+        down.IsEnabled = index < count - 1;
+        var buttons = Kit.Row(4, up, down);
+        Grid.SetColumn(buttons, 2);
+        grid.Children.Add(buttons);
+        return grid;
     }
 
     static FrameworkElement Padded(FrameworkElement e)

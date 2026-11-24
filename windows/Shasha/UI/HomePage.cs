@@ -40,6 +40,7 @@ public sealed class HomePage : Page
         Session.HistoryChanged += MarkDirty;
         Session.FavouritesChanged += MarkDirty;
         Session.ListsChanged += MarkDirty;
+        HomeLayout.Changed += MarkDirty;
         Downloads.Changed += OnDownloads;
     }
 
@@ -68,6 +69,7 @@ public sealed class HomePage : Page
         Session.HistoryChanged -= MarkDirty;
         Session.FavouritesChanged -= MarkDirty;
         Session.ListsChanged -= MarkDirty;
+        HomeLayout.Changed -= MarkDirty;
         Downloads.Changed -= OnDownloads;
     }
 
@@ -77,31 +79,41 @@ public sealed class HomePage : Page
         var offset = _scroll.VerticalOffset;
         _sections.Children.Clear();
 
+        // In the order chosen in Settings (favourites after Continue watching by default). Each row
+        // has its own slot, so the new-items rows, which load later, still land in their place.
+        var slots = new Dictionary<HomeRow, StackPanel>();
+        foreach (var row in HomeLayout.Rows)
+        {
+            slots[row] = new StackPanel();
+            _sections.Children.Add(slots[row]);
+        }
+        var favourites = Session.Favourites.SortedFavourites();
+
         var cont = Session.ContinueWatching();
         if (cont.Count > 0)
-            AddShelf(L("continue_watching"), "WideTemplate", cont.Select((e, i) => ItemActions.Card(e, i)).ToList(),
+            AddShelf(slots[HomeRow.ContinueWatching], L("continue_watching"), "WideTemplate", cont.Select((e, i) => ItemActions.Card(e, i)).ToList(),
                 (c, _) => ItemActions.Open((WatchEntry)c.Model!), c => ItemActions.Menu((WatchEntry)c.Model!));
 
         var recent = Session.RecentChannels();
         if (recent.Count > 0)
-            AddShelf(L("recent_channels"), "ChannelTileTemplate",
+            AddShelf(slots[HomeRow.RecentChannels], L("recent_channels"), "ChannelTileTemplate",
                 recent.Select((e, i) => new CardVM { Title = e.Title, Image = e.Image, Model = e, Index = i }).ToList(),
                 (c, _) => Playback.RecentChannels(recent, c.Index), c => ItemActions.Menu((WatchEntry)c.Model!));
 
-        var favChannels = Session.Favourites.Where(f => f.Type == ContentType.Live).ToList();
+        var favChannels = favourites.Where(f => f.Type == ContentType.Live).ToList();
         if (favChannels.Count > 0)
-            AddShelf(L("favourite_channels"), "ChannelTileTemplate", favChannels.Select((f, i) => ItemActions.Card(f, i)).ToList(),
+            AddShelf(slots[HomeRow.FavouriteChannels], L("favourite_channels"), "ChannelTileTemplate", favChannels.Select((f, i) => ItemActions.Card(f, i)).ToList(),
                 (c, _) => ItemActions.Open((StreamItem)c.Model!, favChannels), c => ItemActions.Menu((StreamItem)c.Model!, favChannels));
 
-        var favVod = Session.Favourites.Where(f => f.Type != ContentType.Live).ToList();
+        var favVod = favourites.Where(f => f.Type != ContentType.Live).ToList();
         if (favVod.Count > 0)
-            AddShelf(L("favourite_vod"), "PosterTemplate", favVod.Select((f, i) => ItemActions.Card(f, i)).ToList(),
+            AddShelf(slots[HomeRow.FavouriteVod], L("favourite_vod"), "PosterTemplate", favVod.Select((f, i) => ItemActions.Card(f, i)).ToList(),
                 (c, _) => ItemActions.Open((StreamItem)c.Model!), c => ItemActions.Menu((StreamItem)c.Model!));
 
         _ = Dispatcher.InvokeAsync(() => _scroll.ScrollToVerticalOffset(offset), System.Windows.Threading.DispatcherPriority.Loaded);
 
         // Recently added (needs the lists, which may still be loading).
-        foreach (var (type, title) in new[] { (ContentType.Movie, L("new_movies")), (ContentType.Series, L("new_series")) })
+        foreach (var (type, row, title) in new[] { (ContentType.Movie, HomeRow.NewMovies, L("new_movies")), (ContentType.Series, HomeRow.NewSeries, L("new_series")) })
         {
             Library lib;
             try { lib = await Session.Load(type); }
@@ -110,22 +122,22 @@ public sealed class HomePage : Page
             var items = Session.FilterAdult(lib, Session.HideAdult).Items
                 .Where(i => i.Added != null).OrderByDescending(i => i.Added).Take(24).ToList();
             if (items.Count == 0) continue;
-            AddShelf(title, "PosterTemplate", items.Select((f, i) => ItemActions.Card(f, i)).ToList(),
+            AddShelf(slots[row], title, "PosterTemplate", items.Select((f, i) => ItemActions.Card(f, i)).ToList(),
                 (c, _) => ItemActions.Open((StreamItem)c.Model!), c => ItemActions.Menu((StreamItem)c.Model!));
         }
 
-        if (_sections.Children.Count == 0)
+        if (slots.Values.All(s => s.Children.Count == 0))
             _sections.Children.Add(Kit.Message("\uE80F", L("app_name"), L("home_empty")));
     }
 
-    void AddShelf(string title, string template, List<CardVM> cards, Action<CardVM, string?> click, Func<CardVM, ContextMenu?> menu)
+    static void AddShelf(StackPanel slot, string title, string template, List<CardVM> cards, Action<CardVM, string?> click, Func<CardVM, ContextMenu?> menu)
     {
         var header = Kit.Text(title, "H2");
         header.Margin = new Thickness(0, 22, 0, 12);
         var shelf = Kit.Shelf(template, cards);
         ItemActions.Wire(shelf, click, menu);
-        _sections.Children.Add(header);
-        _sections.Children.Add(shelf);
+        slot.Children.Add(header);
+        slot.Children.Add(shelf);
     }
 }
 
