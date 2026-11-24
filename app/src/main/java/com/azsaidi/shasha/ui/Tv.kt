@@ -169,8 +169,8 @@ fun Modifier.upExitTo(target: FocusRequester?): Modifier =
         .focusGroup()
 
 /**
- * Where focus lands when it moves into a page from the side menu: the first control at the top
- * (Search, Sort, the first setting), not whatever happens to be level with the menu button.
+ * Where focus lands when it moves into a page from the side menu: the cards (the first one on
+ * screen), or the first setting in Settings; not whatever happens to be level with the menu button.
  */
 class PageTop {
     val requester = FocusRequester()

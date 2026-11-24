@@ -127,7 +127,6 @@ fun HomePage(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier
                         .align(Alignment.CenterVertically)
-                        .pageTop()
                         .focusRequester(searchFocus)
                         .focusRing(RoundedCornerShape(8.dp)),
                 )
@@ -198,7 +197,7 @@ private fun HomeShelves(
     val newSeries = remember(series) { series.filter { (it.added ?: 0) > 0 }.sortedByDescending { it.added }.take(20) }
     val rows = HomeLayout.rows
 
-    LazyColumn(Modifier.fillMaxSize().upExitTo(upTarget), contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(Modifier.fillMaxSize().upExitTo(upTarget).pageTop(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item { ExpiryBanner() }
 
         for (row in rows) when (row) {
@@ -500,7 +499,7 @@ private fun SearchResults(
     }
 
     val channelsTitle = stringResource(R.string.tab_live)
-    LazyColumn(Modifier.fillMaxSize().upExitTo(upTarget), contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(Modifier.fillMaxSize().upExitTo(upTarget).pageTop(), contentPadding = PaddingValues(bottom = 24.dp)) {
         if (foundMovies.isNotEmpty()) {
             shelf(R.string.tab_movies) {
                 items(foundMovies) { item ->

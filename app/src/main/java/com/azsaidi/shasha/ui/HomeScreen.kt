@@ -257,7 +257,7 @@ fun HomeScreen(
                                     if (!contentFocused && !railFocused) runCatching { contentFocus.requestFocus() }
                                 }
                             }
-                            // Coming in from the side menu: the top of the page (not whatever is
+                            // Coming in from the side menu: the cards (not whatever is
                             // level with the menu button, which was the middle of Settings or
                             // Favourites). Not focusRestorer: on Compose 1.7.0 it crashed the
                             // app ("Release should only be called once").
@@ -661,7 +661,6 @@ private fun Browser(
                         label = { Text(query.ifEmpty { stringResource(R.string.search) }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         modifier = Modifier
-                            .pageTop()
                             .focusRequester(searchFocus)
                             .focusRing(RoundedCornerShape(8.dp)),
                     )
@@ -715,7 +714,7 @@ private fun Browser(
                 if (items.isEmpty()) null else stringResource(R.string.try_different),
             )
         } else if (type == ContentType.LIVE) {
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().upExitTo(if (isTv) searchFocus else null)) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().upExitTo(if (isTv) searchFocus else null).pageTop()) {
                 items(filtered) { item -> LiveRow(item, memory) { openItem(item) } }
             }
         } else {
@@ -726,7 +725,7 @@ private fun Browser(
                 // Room around each poster so the focused one can grow without covering others.
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize().upExitTo(if (isTv) searchFocus else null),
+                modifier = Modifier.fillMaxSize().upExitTo(if (isTv) searchFocus else null).pageTop(),
             ) {
                 items(filtered.size) { index ->
                     val item = filtered[index]
@@ -1155,13 +1154,12 @@ private fun FavouritesTab(onOpen: (StreamItem, List<StreamItem>) -> Unit) {
                 label = { Text(stringResource(sort.label), maxLines = 1) },
                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.size(18.dp)) },
                 modifier = Modifier
-                    .pageTop()
                     .focusRequester(sortFocus)
                     .focusRing(RoundedCornerShape(8.dp)),
             )
         }
         LazyColumn(
-            Modifier.fillMaxSize().upExitTo(if (isTv) sortFocus else null),
+            Modifier.fillMaxSize().upExitTo(if (isTv) sortFocus else null).pageTop(),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
             if (movies.isNotEmpty()) {
