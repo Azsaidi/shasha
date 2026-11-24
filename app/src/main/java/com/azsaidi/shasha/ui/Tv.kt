@@ -69,8 +69,18 @@ fun Modifier.focusRing(
     // Solid white: easy to spot on any background from across the room.
     val color = androidx.compose.ui.graphics.Color.White
     val scale by animateFloatAsState(if (focused) focusedScale else 1f, label = "focusScale")
+    // On a page: report this item when it gets focus, so coming back from the side menu lands on it.
+    val page = LocalPageTop.current
+    val self = remember { FocusRequester() }
+    if (page != null) {
+        DisposableEffect(page) { onDispose { page.forget(self) } }
+    }
     this
-        .onFocusChanged { focused = it.hasFocus }
+        .then(if (page != null) Modifier.focusRequester(self) else Modifier)
+        .onFocusChanged {
+            focused = it.hasFocus
+            if (it.isFocused) page?.focused(self)
+        }
         // Draw the focused item above its neighbours so the enlarged card isn't covered.
         .zIndex(if (focused) 1f else 0f)
         // Scale only when drawing. A graphicsLayer scale changes the item's measured bounds, so
@@ -178,8 +188,17 @@ class PageTop {
     var attached by mutableStateOf(false)
         internal set
 
-    /** For focusProperties.enter: the top control, or the normal choice if the page has none. */
-    fun target(): FocusRequester = if (attached) requester else FocusRequester.Default
+    /** The item last focused on the page (null once it leaves the screen). */
+    private var last: FocusRequester? = null
+
+    internal fun focused(item: FocusRequester) { last = item }
+    internal fun forget(item: FocusRequester) { if (last === item) last = null }
+
+    /**
+     * For focusProperties.enter: the item you were on (coming back from the side menu), else the
+     * cards or first setting, else the normal choice.
+     */
+    fun target(): FocusRequester = last ?: if (attached) requester else FocusRequester.Default
 }
 
 val LocalPageTop = staticCompositionLocalOf<PageTop?> { null }

@@ -226,8 +226,6 @@ fun HomeScreen(
     val contentFocus = remember { FocusRequester() }
     var contentFocused by remember { mutableStateOf(false) }
     val pageTop = remember { PageTop() }
-    // The tab whose focused item was remembered when leaving for the side menu.
-    var savedTab by remember { mutableStateOf<HomeTab?>(null) }
     val focusScope = rememberCoroutineScope()
 
     // TV: Back from a page goes to the side menu, then to Home, and only then leaves the app
@@ -237,8 +235,6 @@ fun HomeScreen(
             if (railFocused) {
                 tab = HomeTab.HOME
             } else {
-                // Remember the item, so coming back from the side menu lands on it again.
-                if (runCatching { contentFocus.saveFocusedChild() }.getOrDefault(false)) savedTab = tab
                 runCatching { railFocus.requestFocus() }
             }
         }
@@ -261,32 +257,12 @@ fun HomeScreen(
                                     if (!contentFocused && !railFocused) runCatching { contentFocus.requestFocus() }
                                 }
                             }
-                            // Leaving for the side menu remembers the item; coming back lands on
-                            // it again (e.g. halfway down Settings). The first time on a page:
-                            // the cards, or the first setting (not whatever is level with the
-                            // menu button). Not focusRestorer: on Compose 1.7.0 it crashed the
-                            // app ("Release should only be called once").
-                            .focusProperties {
-                                exit = {
-                                    if (runCatching { contentFocus.saveFocusedChild() }.getOrDefault(false)) savedTab = tab
-                                    FocusRequester.Default
-                                }
-                                enter = {
-                                    if (savedTab == tab) {
-                                        // Restored just after this move: a focus request made
-                                        // inside it was cancelled with it (nothing ended up focused).
-                                        focusScope.launch {
-                                            if (!runCatching { contentFocus.restoreFocusedChild() }.getOrDefault(false)) {
-                                                savedTab = null
-                                                runCatching { pageTop.target().takeIf { it != FocusRequester.Default }?.requestFocus() ?: contentFocus.requestFocus() }
-                                            }
-                                        }
-                                        FocusRequester.Cancel
-                                    } else {
-                                        pageTop.target()
-                                    }
-                                }
-                            }
+                            // Coming back from the side menu lands on the item you were on (e.g.
+                            // halfway down Settings); the first time on a page: the cards, or the
+                            // first setting (not whatever is level with the menu button). Not
+                            // focusRestorer: on Compose 1.7.0 it crashed the app ("Release should
+                            // only be called once").
+                            .focusProperties { enter = { pageTop.target() } }
                             .focusGroup()
                     } else {
                         Modifier
