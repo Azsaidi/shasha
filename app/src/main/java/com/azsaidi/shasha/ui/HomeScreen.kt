@@ -235,6 +235,8 @@ fun HomeScreen(
             if (railFocused) {
                 tab = HomeTab.HOME
             } else {
+                // Remember the item, so coming back from the side menu lands on it again.
+                runCatching { contentFocus.saveFocusedChild() }
                 runCatching { railFocus.requestFocus() }
             }
         }
@@ -257,11 +259,21 @@ fun HomeScreen(
                                     if (!contentFocused && !railFocused) runCatching { contentFocus.requestFocus() }
                                 }
                             }
-                            // Coming in from the side menu: the cards (not whatever is
-                            // level with the menu button, which was the middle of Settings or
-                            // Favourites). Not focusRestorer: on Compose 1.7.0 it crashed the
+                            // Leaving for the side menu remembers the item; coming back lands on
+                            // it again (e.g. halfway down Settings). The first time on a page:
+                            // the cards, or the first setting (not whatever is level with the
+                            // menu button). Not focusRestorer: on Compose 1.7.0 it crashed the
                             // app ("Release should only be called once").
-                            .focusProperties { enter = { pageTop.target() } }
+                            .focusProperties {
+                                exit = {
+                                    runCatching { contentFocus.saveFocusedChild() }
+                                    FocusRequester.Default
+                                }
+                                enter = {
+                                    if (runCatching { contentFocus.restoreFocusedChild() }.getOrDefault(false)) FocusRequester.Cancel
+                                    else pageTop.target()
+                                }
+                            }
                             .focusGroup()
                     } else {
                         Modifier
@@ -1662,8 +1674,13 @@ private fun UpdateSection() {
     val state = Updater.state
 
     OutlinedButton(
-        onClick = { job = scope.launch { Updater.check() } },
-        enabled = state !is Updater.State.Checking && state !is Updater.State.Downloading,
+        // Stays enabled while checking: a disabled button loses focus, which then jumped to
+        // the side menu. Presses while it is busy are ignored instead.
+        onClick = {
+            if (state !is Updater.State.Checking && state !is Updater.State.Downloading) {
+                job = scope.launch { Updater.check() }
+            }
+        },
         modifier = Modifier.fillMaxWidth().focusRing(ButtonShape),
     ) {
         if (state is Updater.State.Checking) {
